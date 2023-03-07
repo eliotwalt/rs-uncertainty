@@ -266,6 +266,7 @@ class DatasetCreator:
         # dictionary for geopandas shapefile
         pixel_infos = defaultdict(list)
         for i in trange(patch_half, gt_file.shape[0] - patch_half):
+            # if i==10: break # DEBUG
             for j in range(patch_half, gt_file.shape[1] - patch_half):
                 i_slice = slice(i - patch_half, i + patch_half + 1)
                 j_slice = slice(j - patch_half, j + patch_half + 1)
@@ -359,7 +360,14 @@ class DatasetCreator:
             labels,
             num_images_per_pixel
         )
-        self._generate_dataset_raster(split_mask, num_images_per_pixel, center_mask, gt_file)
+        self._generate_dataset_raster(
+            rasterized_polygon,
+            split_mask, 
+            num_images_per_pixel, 
+            center_mask, 
+            gt_file,
+            project_id
+        )
         return stats, pixel_infos
     
     def _save_project_patches(
@@ -395,7 +403,15 @@ class DatasetCreator:
             }, fh)
         return path
     
-    def _generate_dataset_raster(self, split_mask, num_images_per_pixel, center_mask, gt_file):
+    def _generate_dataset_raster(
+            self, 
+            rasterized_polygon, 
+            split_mask, 
+            num_images_per_pixel, 
+            center_mask, 
+            gt_file, 
+            project_id
+        ):
         """
         DatasetCreator._generate_dataset_raster method: generate dataset summary raster
 
@@ -404,11 +420,14 @@ class DatasetCreator:
         2. Number of images per pixel: number of images on each pixel
         3. Valid centers map: binary mask. 0 means pixel is not a valid center, 1 means it is
         """
+        split_mask = np.expand_dims(split_mask, 0)
+        # make raster
         raster = np.concatenate([
-            np.expand_dims(split_mask, 0),
+            split_mask,
             num_images_per_pixel,
             center_mask,
         ], axis=0)
+        # save to tif
         with rasterio.Env():
             profile = gt_file.profile
             profile.update(
@@ -418,5 +437,6 @@ class DatasetCreator:
                 nodata=None,
                 dtype='uint8'
             )
-            with rasterio.open(pjoin(self.save_dir, f"info_{gt_file.stem}.tif"), "w", **profile) as f:
+            with rasterio.open(pjoin(self.save_dir, f"info_{project_id}.tif"), "w", **profile) as f:
                 f.write(raster)
+                f.write_mask(rasterized_polygon.astype(bool))
