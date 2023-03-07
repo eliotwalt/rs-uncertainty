@@ -405,7 +405,7 @@ class DatasetCreator:
         3. Valid centers map: binary mask. 0 means pixel is not a valid center, 1 means it is
         """
         raster = np.concatenate([
-            split_mask,
+            np.expand_dims(split_mask, 0),
             num_images_per_pixel,
             center_mask,
         ], axis=0)
