@@ -386,7 +386,7 @@ class DatasetCreator:
                 count=raster.shape[0],
                 compress='deflate',
                 nodata=None,
-                dtype='uint'
+                dtype='uint8'
             )
             with rasterio.open(pjoin(self.save_dir, f"info_map_{project_id}.tif"), "w", **profile) as f:
                 f.write(raster)
