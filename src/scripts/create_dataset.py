@@ -338,15 +338,15 @@ class DatasetCreator:
             offsets,
             labels,
         )
-        # self._make_dataset_info(
-        #     project_id,
-        #     gt_file,
-        #     locations,
-        #     num_images_per_pixel,
-        #     split_mask,
-        #     valid_mask,
-        #     rasterized_polygon
-        # )
+        self._make_dataset_info(
+            project_id,
+            gt_file,
+            locations,
+            num_images_per_pixel,
+            split_mask,
+            valid_mask,
+            rasterized_polygon
+        )
         return stats
     
     def _make_dataset_info(
