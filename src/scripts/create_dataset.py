@@ -340,6 +340,9 @@ class DatasetCreator:
             labels,
             num_images_per_pixel
         )
+        valid_centers = np.zeros_like(num_images_per_pixel)
+        all_locations = list(chain(locations[dataset] for dataset in self.split_map.keys()))
+        valid_centers[locations]
         self._generate_dataset_raster(
             rasterized_polygon,
             split_mask, 
