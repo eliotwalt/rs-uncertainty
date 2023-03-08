@@ -251,8 +251,8 @@ class DatasetCreator:
         locations = defaultdict(list)
         loc_to_images_map = defaultdict(list)
         offsets = defaultdict(list)
-        num_images_per_pixel = np.zeros((1, gt_file.shape[0], gt_file.shape[1]), dtype=np.uint8)
-        center_mask = np.zeros((1, gt_file.shape[0], gt_file.shape[1]), dtype=np.uint8)
+        shape = gt_file.shape
+        num_images_per_pixel = np.zeros((1, *shape), dtype=np.uint8)
         patch_half = self.run['patch_size'] // 2
         for i in trange(patch_half, gt_file.shape[0] - patch_half):
             # if i==10: break # DEBUG
@@ -263,7 +263,6 @@ class DatasetCreator:
                 is_in_polygon = (rasterized_polygon[i_slice, j_slice] == 1).all()
                 # Ignore pixels that span over multiple splits and lie completly in their polygon
                 if is_same_split and is_in_polygon and valid_mask[i,j]:
-                    center_mask[0,i,j] = 1
                     images_for_pixel: List[Tuple[np.ndarray, List[np.ndarray], List[np.ndarray]]] = []
                     s2_dates_used = set()
                     # filter out s1 images which contain a nodata pixel in the patch, i.e. images which do
@@ -338,20 +337,57 @@ class DatasetCreator:
             loc_to_images_map,
             offsets,
             labels,
-            num_images_per_pixel
         )
-        valid_centers = np.zeros_like(num_images_per_pixel)
-        all_locations = list(chain(locations[dataset] for dataset in self.split_map.keys()))
-        valid_centers[locations]
-        self._generate_dataset_raster(
-            rasterized_polygon,
-            split_mask, 
+        # self._make_dataset_info(
+        #     project_id,
+        #     gt_file,
+        #     locations,
+        #     num_images_per_pixel,
+        #     split_mask,
+        #     valid_mask,
+        #     rasterized_polygon
+        # )
+    
+    def _make_dataset_info(
+        self,
+        project_id,
+        gt_file,
+        locations,
+        num_images_per_pixel,
+        split_mask,
+        valid_mask,
+        rasterized_polygon
+    ):
+        # Create valid center map
+        shape = gt_file.shape
+        valid_center_mask = defaultdict(np.ndarray)
+        valid_center_mask["any"] = np.zeros(shape, dtype=np.uint8)
+        for split in self.split_map.values():
+            valid_center_mask[split] = np.zeros(shape, dtype=np.uint8)
+            for i, j in locations[split]:
+                valid_center_mask[split][i,j] = 1
+                valid_center_mask["any"][i,j] = 1
+        # create tensor
+        to3d = lambda x: x if len(x.shape)==3 else np.expand_dims(x, axis=0)
+        raster = np.concatenate([to3d(a) for a in [
+            valid_center_mask,
+            split_mask,
             num_images_per_pixel, 
-            center_mask, 
-            gt_file,
-            project_id
-        )
-        return stats
+            valid_mask,
+            rasterized_polygon
+        ]], axis=0)
+        # save geotiff
+        with rasterio.Env():
+            profile = gt_file.profile
+            profile.update(
+                driver='GTiff',
+                count=raster.shape[0],
+                compress='deflate',
+                nodata=None,
+                dtype='uint8'
+            )
+            with rasterio.open(pjoin(self.save_dir, f"dataset_info_{project_id}.tif"), "w", **profile) as f:
+                f.write(raster)
     
     def _save_project_patches(
             self,
@@ -361,7 +397,6 @@ class DatasetCreator:
             loc_to_images_map,
             offsets,
             labels,
-            num_images_per_pixel
         ):
         path = pjoin(self.save_dir, f"{project_id}.pkl")
         with path.open("wb") as fh:
