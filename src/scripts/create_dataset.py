@@ -360,13 +360,10 @@ class DatasetCreator:
     ):
         # Create valid center map
         shape = gt_file.shape
-        valid_center_mask = defaultdict(np.ndarray)
-        valid_center_mask["any"] = np.zeros(shape, dtype=np.uint8)
-        for split in self.split_map.values():
-            valid_center_mask[split] = np.zeros(shape, dtype=np.uint8)
+        valid_center_mask = np.zeros(shape, dtype=np.uint8)
+        for split in locations.keys():
             for i, j in locations[split]:
-                valid_center_mask[split][i,j] = 1
-                valid_center_mask["any"][i,j] = 1
+                valid_center_mask[i,j] = 1
         # create tensor
         to3d = lambda x: x if len(x.shape)==3 else np.expand_dims(x, axis=0)
         raster = np.concatenate([to3d(a) for a in [
