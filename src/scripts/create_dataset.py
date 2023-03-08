@@ -423,9 +423,9 @@ class DatasetCreator:
         split_mask = np.expand_dims(split_mask, 0)
         # make raster
         raster = np.concatenate([
-            split_mask,
-            num_images_per_pixel,
-            center_mask,
+            split_mask,               # show CV splits
+            num_images_per_pixel,     # show image density
+            center_mask,              # show valid center mask according to sampling strategy
         ], axis=0)
         # save to tif
         with rasterio.Env():
@@ -439,4 +439,11 @@ class DatasetCreator:
             )
             with rasterio.open(pjoin(self.save_dir, f"info_{project_id}.tif"), "w", **profile) as f:
                 f.write(raster)
-                f.write_mask(rasterized_polygon.astype(bool))
+                f.write_mask(rasterized_polygon.astype(bool)) # crop to rasterized_polygon boundaries
+
+if __name__=="__main__":
+    import sys, os
+    root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    cfg_file = sys.argv[1] if len(sys.argv)>2 and sys.argv[1]!="" else os.path.join(root, "config", "create_dataset-dev.yaml")
+    run = blowtorch.run.Run(config_files=[cfg_file])
+    dataset = DatasetCreator(run)
