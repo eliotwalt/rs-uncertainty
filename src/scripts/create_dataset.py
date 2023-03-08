@@ -13,6 +13,7 @@ import fiona
 import os
 import rasterio.warp
 import rasterio.features
+import matplotlib
 import matplotlib.pyplot as plt
 
 def parse_date(date_str) -> datetime: return datetime.strptime(date_str, '%Y%m%d')
@@ -342,7 +343,6 @@ class DatasetCreator:
             project_id,
             gt_file,
             locations,
-            num_images_per_pixel,
             split_mask,
             valid_mask,
             rasterized_polygon
@@ -354,7 +354,6 @@ class DatasetCreator:
         project_id,
         gt_file,
         locations,
-        num_images_per_pixel,
         split_mask,
         valid_mask,
         rasterized_polygon
@@ -363,16 +362,21 @@ class DatasetCreator:
         shape = gt_file.shape
         valid_center_mask = np.zeros(shape, dtype=np.uint8)
         for split in locations.keys():
-            for i, j in locations[split]:
-                valid_center_mask[i,j] = 1
+            idx = np.array(locations[split])
+            valid_center_mask[idx[:,0],idx[:,1]] = 1                
+        # create 2D info map
+        dataset_info_map = split_mask.copy()
+        dataset_info_map += 1
+        dataset_info_map[valid_mask==0] = 1
+        dataset_info_map[valid_center_mask==0] = 1
+        dataset_info_map[rasterized_polygon==0] = np.nan 
         # create tensor
         to3d = lambda x: x if len(x.shape)==3 else np.expand_dims(x, axis=0)
         raster = np.concatenate([to3d(a) for a in [
+            dataset_info_map,
             valid_center_mask,
             split_mask,
-            num_images_per_pixel, 
-            valid_mask,
-            rasterized_polygon
+            valid_mask
         ]], axis=0)
         # save geotiff
         with rasterio.Env():
@@ -384,8 +388,9 @@ class DatasetCreator:
                 nodata=None,
                 dtype='uint8'
             )
-            with rasterio.open(pjoin(self.save_dir, f"dataset_info_{project_id}.tif"), "w", **profile) as f:
+            with rasterio.open(pjoin(self.save_dir, f"info_map_{project_id}.tif"), "w", **profile) as f:
                 f.write(raster)
+                f.write_mask(rasterized_polygon.astype(bool)) # crop to rasterized_polygon boundaries
     
     def _save_project_patches(
             self,
@@ -457,9 +462,17 @@ class DatasetCreator:
                 f.write(raster)
                 f.write_mask(rasterized_polygon.astype(bool)) # crop to rasterized_polygon boundaries
 
+    def plot(self, project_id, ax=None):
+        rasterfile = rasterio.open(pjoin(self.save_dir, f"dataset_info_{project_id}.tif"))
+        valid_centers = rasterfile.read(1).astype(np.float16)
+        split_mask = rasterfile.read(2).astype(np.float16)
+        num_images_per_pixel = rasterfile.read(3).astype(np.float16)
+        valid_mask = rasterfile.read(4).astype(np.float16)
+        polygon = rasterfile.read(5).astype(np.float16)
+
 if __name__=="__main__":
     import sys, os
     root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-    cfg_file = sys.argv[1] if len(sys.argv)>2 and sys.argv[1]!="" else os.path.join(root, "config", "create_dataset-dev.yaml")
+    cfg_file = sys.argv[1] if len(sys.argv)>2 and sys.argv[1]!="" else os.path.join(root, "config", "create_dataset.yaml")
     run = blowtorch.run.Run(config_files=[cfg_file])
     dataset = DatasetCreator(run)
