@@ -347,6 +347,7 @@ class DatasetCreator:
         #     valid_mask,
         #     rasterized_polygon
         # )
+        return stats
     
     def _make_dataset_info(
         self,
