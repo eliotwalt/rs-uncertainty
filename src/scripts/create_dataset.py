@@ -386,7 +386,7 @@ class DatasetCreator:
                 count=raster.shape[0],
                 compress='deflate',
                 nodata=None,
-                dtype='uint8'
+                dtype='float'
             )
             with rasterio.open(pjoin(self.save_dir, f"info_map_{project_id}.tif"), "w", **profile) as f:
                 f.write(raster)
@@ -423,52 +423,12 @@ class DatasetCreator:
                 'labels': labels
             }, fh)
         return path
-    
-    def _generate_dataset_raster(
-            self, 
-            rasterized_polygon, 
-            split_mask, 
-            num_images_per_pixel, 
-            center_mask, 
-            gt_file, 
-            project_id
-        ):
-        """
-        DatasetCreator._generate_dataset_raster method: generate dataset summary raster
-
-        Bands (in order):
-        1. Cross-validation splits: ternary mask. 0 is train, 1 is val, 2 is test
-        2. Number of images per pixel: number of images on each pixel
-        3. Valid centers map: binary mask. 0 means pixel is not a valid center, 1 means it is
-        """
-        split_mask = np.expand_dims(split_mask, 0)
-        # make raster
-        raster = np.concatenate([
-            split_mask,               # show CV splits
-            num_images_per_pixel,     # show image density
-            center_mask,              # show valid center mask according to sampling strategy
-        ], axis=0)
-        # save to tif
-        with rasterio.Env():
-            profile = gt_file.profile
-            profile.update(
-                driver='GTiff',
-                count=raster.shape[0],
-                compress='deflate',
-                nodata=None,
-                dtype='uint8'
-            )
-            with rasterio.open(pjoin(self.save_dir, f"info_{project_id}.tif"), "w", **profile) as f:
-                f.write(raster)
-                f.write_mask(rasterized_polygon.astype(bool)) # crop to rasterized_polygon boundaries
 
     def plot(self, project_id, ax=None):
-        rasterfile = rasterio.open(pjoin(self.save_dir, f"dataset_info_{project_id}.tif"))
-        valid_centers = rasterfile.read(1).astype(np.float16)
-        split_mask = rasterfile.read(2).astype(np.float16)
-        num_images_per_pixel = rasterfile.read(3).astype(np.float16)
-        valid_mask = rasterfile.read(4).astype(np.float16)
-        polygon = rasterfile.read(5).astype(np.float16)
+        rasterfile = rasterio.open(pjoin(self.save_dir, f"info_map_{project_id}.tif"))
+        imap = rasterfile.read(1).astype(np.float16)
+        if ax: ax.imshow(imap, cmap=matplotlib.colors.ListedColormap(["black", "yellow", "blue", "red"])); return ax
+        else: plt.imshow(imap, cmap=matplotlib.colors.ListedColormap(["black", "yellow", "blue", "red"]))
 
 if __name__=="__main__":
     import sys, os
@@ -476,3 +436,4 @@ if __name__=="__main__":
     cfg_file = sys.argv[1] if len(sys.argv)>2 and sys.argv[1]!="" else os.path.join(root, "config", "create_dataset-dev.yaml")
     run = blowtorch.run.Run(config_files=[cfg_file])
     dataset = DatasetCreator(run)
+    dataset.plot("346")
