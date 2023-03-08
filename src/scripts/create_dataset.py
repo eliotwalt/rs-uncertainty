@@ -361,9 +361,11 @@ class DatasetCreator:
         # Create valid center map
         shape = gt_file.shape
         valid_center_mask = np.zeros(shape, dtype=np.uint8)
+        idx = []
         for split in locations.keys():
-            idx = np.array(locations[split])
-            valid_center_mask[idx[:,0],idx[:,1]] = 1                
+            idx.extend(locations[split])
+        idx = np.array(idx)
+        valid_center_mask[idx[:,0],idx[:,1]] = 1
         # create 2D info map
         dataset_info_map = split_mask.copy()
         dataset_info_map += 2
