@@ -369,7 +369,7 @@ class DatasetCreator:
         dataset_info_map += 1
         dataset_info_map[valid_mask==0] = 1
         dataset_info_map[valid_center_mask==0] = 1
-        dataset_info_map[rasterized_polygon==0] = np.nan 
+        dataset_info_map[rasterized_polygon==0] = -1 # np.nan
         # create tensor
         to3d = lambda x: x if len(x.shape)==3 else np.expand_dims(x, axis=0)
         raster = np.concatenate([to3d(a) for a in [
@@ -386,7 +386,7 @@ class DatasetCreator:
                 count=raster.shape[0],
                 compress='deflate',
                 nodata=None,
-                dtype='float'
+                dtype='uint'
             )
             with rasterio.open(pjoin(self.save_dir, f"info_map_{project_id}.tif"), "w", **profile) as f:
                 f.write(raster)
@@ -427,6 +427,7 @@ class DatasetCreator:
     def plot(self, project_id, ax=None):
         rasterfile = rasterio.open(pjoin(self.save_dir, f"info_map_{project_id}.tif"))
         imap = rasterfile.read(1).astype(np.float16)
+        imap[imap<0] = np.nan
         if ax: ax.imshow(imap, cmap=matplotlib.colors.ListedColormap(["black", "yellow", "blue", "red"])); return ax
         else: plt.imshow(imap, cmap=matplotlib.colors.ListedColormap(["black", "yellow", "blue", "red"]))
 
