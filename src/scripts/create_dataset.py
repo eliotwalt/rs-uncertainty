@@ -366,9 +366,9 @@ class DatasetCreator:
             valid_center_mask[idx[:,0],idx[:,1]] = 1                
         # create 2D info map
         dataset_info_map = split_mask.copy()
-        dataset_info_map += 1
+        dataset_info_map += 2
         dataset_info_map[valid_mask==0] = 1
-        dataset_info_map[valid_center_mask==0] = 1
+        dataset_info_map[valid_center_mask==0] = 0
         dataset_info_map[rasterized_polygon==0] = -1 # np.nan
         # create tensor
         to3d = lambda x: x if len(x.shape)==3 else np.expand_dims(x, axis=0)
@@ -428,8 +428,8 @@ class DatasetCreator:
         rasterfile = rasterio.open(pjoin(self.save_dir, f"info_map_{project_id}.tif"))
         imap = rasterfile.read(1).astype(np.float16)
         imap[imap<0] = np.nan
-        if ax: ax.imshow(imap, cmap=matplotlib.colors.ListedColormap(["black", "yellow", "blue", "red"])); return ax
-        else: plt.imshow(imap, cmap=matplotlib.colors.ListedColormap(["black", "yellow", "blue", "red"]))
+        if ax: ax.imshow(imap, cmap=matplotlib.colors.ListedColormap(["black", "white", "yellow", "blue", "red"])); return ax
+        else: plt.imshow(imap, cmap=matplotlib.colors.ListedColormap(["black", "white", "yellow", "blue", "red"]))
 
 if __name__=="__main__":
     import sys, os
