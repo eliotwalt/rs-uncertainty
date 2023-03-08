@@ -473,6 +473,6 @@ class DatasetCreator:
 if __name__=="__main__":
     import sys, os
     root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-    cfg_file = sys.argv[1] if len(sys.argv)>2 and sys.argv[1]!="" else os.path.join(root, "config", "create_dataset.yaml")
+    cfg_file = sys.argv[1] if len(sys.argv)>2 and sys.argv[1]!="" else os.path.join(root, "config", "create_dataset-dev.yaml")
     run = blowtorch.run.Run(config_files=[cfg_file])
     dataset = DatasetCreator(run)
