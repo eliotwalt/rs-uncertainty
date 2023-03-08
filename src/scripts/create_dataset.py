@@ -13,9 +13,6 @@ import fiona
 import os
 import rasterio.warp
 import rasterio.features
-from shapely.geometry import Point
-import geopandas as gpd
-import pandas as pd
 import matplotlib.pyplot as plt
 
 def parse_date(date_str) -> datetime: return datetime.strptime(date_str, '%Y%m%d')
@@ -46,8 +43,6 @@ class DatasetCreator:
             "valid_center": self._get_valid_center_patches
         }
         self.dataset_stats = defaultdict()
-        # initialize pixel info for shapefile
-        self.pixel_gdf = gpd.GeoDataFrame()
         # verify run config
         self._validate_run_config()
         # set all random seeds
@@ -61,17 +56,14 @@ class DatasetCreator:
         for gt_file_path in Path(self.run["gt_dir"]).glob("*.tif"):
             if gt_file_path.stem in projects:
                 projects.remove(gt_file_path.stem)
-                project_dataset_stats, project_pixel_gdf = self._create_project_dataset(gt_file_path)
+                project_dataset_stats = self._create_project_dataset(gt_file_path)
                 self.dataset_stats[gt_file_path.stem] = project_dataset_stats
-                self.pixel_gdf = pd.concat([self.pixel_gdf, project_pixel_gdf])
                 if len(projects) == 0: break
         # save stats and config
         with pjoin(self.save_dir, "stats.yaml").open("w") as fh:
             yaml.dump(defaultdict2dict(self.dataset_stats), fh)
         with pjoin(self.save_dir, "data_config.yaml").open("w") as fh:
             yaml.dump(self.run.get_raw_config(), fh)
-        # geopandas
-        self.pixel_gdf.to_file(pjoin(self.save_dir, "projects.shp"))
 
     def _create_project_dataset(self, gt_file_path) -> None:
         # get project id
@@ -102,7 +94,7 @@ class DatasetCreator:
         project_dataset_stats["num_s1_images"] = len(s1_images_ascending)
         project_dataset_stats["num_s1_images"] = len(s1_images_descending)
         # make patches
-        patches_stats, pixel_infos = self._make_project_patches(
+        patches_stats = self._make_project_patches(
             gt_file,
             project_id,
             split_mask,
@@ -118,9 +110,7 @@ class DatasetCreator:
         # copy stats
         for k, v in patches_stats.items():
             project_dataset_stats[k] = v
-        # geo_df
-        pixel_gdf = gpd.GeoDataFrame(pixel_infos, crs=gt_file.crs)
-        return project_dataset_stats, pixel_gdf
+        return project_dataset_stats
 
     def _validate_run_config(self) -> None:
         """
@@ -233,7 +223,8 @@ class DatasetCreator:
         return images, image_ids, s2_images, s1_images_ascending, s1_images_descending
     
     def _make_project_patches(self, *args, **kwargs):
-        """                    pixel_infos["index"].append(str((i,j))) strategy to respective patch sampling method according 
+        """
+        DatasetCreator._make_project_patches method: selects and apply patch sampling strategy specified in configuration according 
             to `self.patches_sampling_strategy_map`.
         """
         return self.patches_sampling_strategy_map[self.run["sampling_strategy"]](*args, **kwargs)
@@ -263,8 +254,6 @@ class DatasetCreator:
         num_images_per_pixel = np.zeros((1, gt_file.shape[0], gt_file.shape[1]), dtype=np.uint8)
         center_mask = np.zeros((1, gt_file.shape[0], gt_file.shape[1]), dtype=np.uint8)
         patch_half = self.run['patch_size'] // 2
-        # dictionary for geopandas shapefile
-        pixel_infos = defaultdict(list)
         for i in trange(patch_half, gt_file.shape[0] - patch_half):
             # if i==10: break # DEBUG
             for j in range(patch_half, gt_file.shape[1] - patch_half):
@@ -273,79 +262,70 @@ class DatasetCreator:
                 is_same_split = (split_mask[i_slice, j_slice] == split_mask[i_slice, j_slice][0, 0]).all()
                 is_in_polygon = (rasterized_polygon[i_slice, j_slice] == 1).all()
                 # Ignore pixels that span over multiple splits and lie completly in their polygon
-                if is_same_split and is_in_polygon:
-                    pixel_infos["geometry"].append(Point(i,j))
-                    pixel_infos["split"].append(int(split_mask[i,j]))
-                    pixel_infos["kv_id"].append(int(project_id))
-                    # Add information about non valid pixels too
-                    if not valid_mask[i,j]:
-                        pixel_infos["valid"].append(0)
-                    # Process valid pixels further
-                    else:
-                        pixel_infos["valid"].append(1)
-                        center_mask[0,i,j] = 1
-                        images_for_pixel: List[Tuple[np.ndarray, List[np.ndarray], List[np.ndarray]]] = []
-                        s2_dates_used = set()
-                        # filter out s1 images which contain a nodata pixel in the patch, i.e. images which do
-                        # not fully cover the patch. We noticed that some s1 images have weird stripes with
-                        # values close to (but not exactly) zero near the swath edge. Therefore we empirically
-                        # set the threshold value to 8.
-                        valid_ascending = [img for img in s1_images_ascending if (img[0][:, i_slice, j_slice] > 8.).all()]
-                        valid_descending = [img for img in s1_images_descending if (img[0][:, i_slice, j_slice] > 8.).all()]
-                        if len(valid_ascending) == 0 or len(valid_descending) == 0:
+                if is_same_split and is_in_polygon and valid_mask[i,j]:
+                    center_mask[0,i,j] = 1
+                    images_for_pixel: List[Tuple[np.ndarray, List[np.ndarray], List[np.ndarray]]] = []
+                    s2_dates_used = set()
+                    # filter out s1 images which contain a nodata pixel in the patch, i.e. images which do
+                    # not fully cover the patch. We noticed that some s1 images have weird stripes with
+                    # values close to (but not exactly) zero near the swath edge. Therefore we empirically
+                    # set the threshold value to 8.
+                    valid_ascending = [img for img in s1_images_ascending if (img[0][:, i_slice, j_slice] > 8.).all()]
+                    valid_descending = [img for img in s1_images_descending if (img[0][:, i_slice, j_slice] > 8.).all()]
+                    if len(valid_ascending) == 0 or len(valid_descending) == 0:
+                        continue
+                    for s2_image, s2_date in s2_images:
+                        # do not add image if an image of the same date has been added for this location before.
+                        # this is the case e.g. for the overlap region between two adjacent S2 images, which is
+                        # identical for both images and would result in duplicate data points.
+                        if s2_date in s2_dates_used:
                             continue
-                        for s2_image, s2_date in s2_images:
-                            # do not add image if an image of the same date has been added for this location before.
-                            # this is the case e.g. for the overlap region between two adjacent S2 images, which is
-                            # identical for both images and would result in duplicate data points.
-                            if s2_date in s2_dates_used:
-                                continue
-                            # only add patch if there is no nodata pixel contained, where a nodata pixel is
-                            # defined as having zeros across all channels.
-                            if (s2_image[:, i_slice, j_slice] == 0.).all(0).any():
-                                continue
-                            # only add patch with less than 10% cloudy pixels, where a cloudy pixel is defined as
-                            # having cloud probability > 10%.
-                            if (s2_image[-1, i_slice, j_slice] > self.run['cloud_prob_threshold']).sum() \
-                                    / self.run['patch_size']**2 > self.run['cloudy_pixels_threshold']:
-                                continue
-                            # determine matching s1 image date(s). All S1 images within 15 days of the S2 image will be
-                            # added (and sampled randomly from during training).
-                            matching_ascending = [img for img, date in valid_ascending if
-                                                abs((s2_date - date).days) <= 15]
-                            matching_descending = [img for img, date in valid_descending if
-                                                abs((s2_date - date).days) <= 15]
-                            # add s2 and matching s1 images to list of available images for this location
-                            if len(matching_ascending) and len(matching_descending):
-                                images_for_pixel.append((s2_image, matching_ascending, matching_descending))
-                                s2_dates_used.add(s2_date)
-                        num_images_per_pixel[0, i, j] = len(images_for_pixel)
-                        # a data point corresponds to one image coordinate, such that regions with higher number
-                        # of available images are not oversampled during training. Only add if there's at least one image
-                        # for that pixel.
-                        if len(images_for_pixel):
-                            data_point = (i, j, images_for_pixel, labels)
-                            # transform `images_for_pixel` into contiguos numpy array where images are referenced based on
-                            # their index in `images`
-                            this_loc_to_images_map = []
-                            for s2_image, s1_a_list, s1_d_list in images_for_pixel:
-                                this_loc_to_images_map.extend(
-                                    [image_ids.index(id(s2_image)), self.separator]
-                                    + [image_ids.index(id(img)) for img in s1_a_list]
-                                    + [self.separator]
-                                    + [image_ids.index(id(img)) for img in s1_d_list]
-                                    + [self.separator]
-                                )
-                            # add sample stats to corresponding split
-                            dataset = self.split_map[int(split_mask[i,j])]
-                            locations[dataset].append((i, j))
-                            offsets[dataset].append(len(loc_to_images_map[dataset]))
-                            loc_to_images_map[dataset].extend(this_loc_to_images_map)
+                        # only add patch if there is no nodata pixel contained, where a nodata pixel is
+                        # defined as having zeros across all channels.
+                        if (s2_image[:, i_slice, j_slice] == 0.).all(0).any():
+                            continue
+                        # only add patch with less than 10% cloudy pixels, where a cloudy pixel is defined as
+                        # having cloud probability > 10%.
+                        if (s2_image[-1, i_slice, j_slice] > self.run['cloud_prob_threshold']).sum() \
+                                / self.run['patch_size']**2 > self.run['cloudy_pixels_threshold']:
+                            continue
+                        # determine matching s1 image date(s). All S1 images within 15 days of the S2 image will be
+                        # added (and sampled randomly from during training).
+                        matching_ascending = [img for img, date in valid_ascending if
+                                            abs((s2_date - date).days) <= 15]
+                        matching_descending = [img for img, date in valid_descending if
+                                            abs((s2_date - date).days) <= 15]
+                        # add s2 and matching s1 images to list of available images for this location
+                        if len(matching_ascending) and len(matching_descending):
+                            images_for_pixel.append((s2_image, matching_ascending, matching_descending))
+                            s2_dates_used.add(s2_date)
+                    num_images_per_pixel[0, i, j] = len(images_for_pixel)
+                    # a data point corresponds to one image coordinate, such that regions with higher number
+                    # of available images are not oversampled during training. Only add if there's at least one image
+                    # for that pixel.
+                    if len(images_for_pixel):
+                        data_point = (i, j, images_for_pixel, labels)
+                        # transform `images_for_pixel` into contiguos numpy array where images are referenced based on
+                        # their index in `images`
+                        this_loc_to_images_map = []
+                        for s2_image, s1_a_list, s1_d_list in images_for_pixel:
+                            this_loc_to_images_map.extend(
+                                [image_ids.index(id(s2_image)), self.separator]
+                                + [image_ids.index(id(img)) for img in s1_a_list]
+                                + [self.separator]
+                                + [image_ids.index(id(img)) for img in s1_d_list]
+                                + [self.separator]
+                            )
+                        # add sample stats to corresponding split
+                        dataset = self.split_map[int(split_mask[i,j])]
+                        locations[dataset].append((i, j))
+                        offsets[dataset].append(len(loc_to_images_map[dataset]))
+                        loc_to_images_map[dataset].extend(this_loc_to_images_map)
         # save stats
         stats["num_images_per_pixel"] = {
-            "mean": num_images_per_pixel.mean(), 
-            "min": num_images_per_pixel.min(),
-            "max": num_images_per_pixel.max(),
+            "mean": float(num_images_per_pixel.mean()), 
+            "min": float(num_images_per_pixel.min()),
+            "max": float(num_images_per_pixel.max()),
         }
         stats["num_train"] = len(locations["train"])
         stats["num_val"] = len(locations['val'])
@@ -368,7 +348,7 @@ class DatasetCreator:
             gt_file,
             project_id
         )
-        return stats, pixel_infos
+        return stats
     
     def _save_project_patches(
             self,
