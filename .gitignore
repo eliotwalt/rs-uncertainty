@@ -2,6 +2,9 @@
 data/
 train_logs/
 ignore.*
+*.stdout
+*.stderr
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
