@@ -4,7 +4,7 @@ from datetime import datetime
 from itertools import chain
 from collections import defaultdict
 import pickle
-import yaml
+import yaml, json
 import blowtorch
 from blowtorch import Run
 from tqdm import trange
@@ -71,13 +71,16 @@ class DatasetCreator:
                 if len(projects) == 0: break
         # create dataset
         start = time()
-        with multiprocessing.Pool(processes=int(0.75*os.cpu_count())) as pool:
+        if self.verbose: print("Processing projects")
+        with multiprocessing.Pool(processes=int(0.5*os.cpu_count())) as pool:
             for project_dataset_stats, project_id in  pool.imap(self._create_project_dataset, arg_dicts):
                 self.dataset_stats[project_id] = project_dataset_stats
         if self.verbose: print("Done processing projects in {:.2f}s".format(time()-start))
         # save stats and config
         start = time()
         if self.verbose: print("Writing stats")
+        with pjoin(self.save_dir, "stats.json").open("w") as fh:
+            json.dump(self.dataset_stats, fh, indent="\t")
         with pjoin(self.save_dir, "stats.yaml").open("w") as fh:
             yaml.dump(self.dataset_stats, fh)
         if self.verbose: print("Done writing stats in {:.2f}s".format(time()-start))
