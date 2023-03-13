@@ -1,6 +1,6 @@
 from typing import *
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from itertools import chain
 from collections import defaultdict
 import pickle
@@ -45,7 +45,7 @@ class DatasetCreator:
         self.patches_sampling_strategy_map = {
             "valid_center": self._get_valid_center_patches
         }
-        self.dataset_stats = defaultdict()
+        self.dataset_stats = {}
         # verify run config
         self._validate_run_config()
         # set all random seeds
@@ -75,7 +75,7 @@ class DatasetCreator:
         with multiprocessing.Pool(processes=int(0.5*os.cpu_count())) as pool:
             for project_dataset_stats, project_id in  pool.imap(self._create_project_dataset, arg_dicts):
                 self.dataset_stats[project_id] = project_dataset_stats
-        if self.verbose: print("Done processing projects in {:.2f}s".format(time()-start))
+        if self.verbose: print("Done processing projects in {}".format(timedelta(seconds=time()-start)))
         # save stats and config
         start = time()
         if self.verbose: print("Writing stats")
@@ -83,21 +83,22 @@ class DatasetCreator:
         #     json.dump(self.dataset_stats, fh, indent="\t")
         with pjoin(self.save_dir, "stats.yaml").open("w") as fh:
             yaml.dump(self.dataset_stats, fh)
-        if self.verbose: print("Done writing stats in {:.2f}s".format(time()-start))
+        if self.verbose: print("Done writing stats in {}".format(timedelta(seconds=time()-start)))
         start = time()
         if self.verbose: print("Writing config")
         with pjoin(self.save_dir, "data_config.yaml").open("w") as fh:
             yaml.dump(self.run.get_raw_config(), fh)
-        if self.verbose: print("Done writing config in {:.2f}s".format(time()-start))
+        if self.verbose: print("Done writing config in {}".format(timedelta(seconds=time()-start)))
 
     def _create_project_dataset(self, args_dict: dict) -> None:
         gt_file_path, i, N = args_dict["gt_file_path"], args_dict["i"], args_dict["N"]
         if self.verbose:
+            start = time()
             print(f"[{i}/{N}] Processing id {gt_file_path.stem} ({datetime.now().strftime('%Y-%m-%d_%H-%M-%S')})")
         # get project id
         project_id = gt_file_path.stem
         # initialize stats dict
-        project_dataset_stats = defaultdict()
+        project_dataset_stats = {}
         project_dataset_stats["num_train"] = 0
         project_dataset_stats["num_val"] = 0
         project_dataset_stats["num_test"] = 0
@@ -137,6 +138,9 @@ class DatasetCreator:
         # copy stats
         for k, v in patches_stats.items():
             project_dataset_stats[k] = v
+            if k in ["num_train", "num_test", "num_test"]: project_dataset_stats[k] += v
+        if self.verbose:
+            print(f"[{i}/{N}] Done processing id {gt_file_path.stem} in {str(timedelta(seconds=time()-start))}")
         return project_dataset_stats, project_id
 
     def _validate_run_config(self) -> None:
@@ -274,7 +278,7 @@ class DatasetCreator:
         
         """
         # variables
-        stats = defaultdict()
+        stats = {}
         locations = defaultdict(list)
         loc_to_images_map = defaultdict(list)
         offsets = defaultdict(list)
