@@ -79,8 +79,8 @@ class DatasetCreator:
         # save stats and config
         start = time()
         if self.verbose: print("Writing stats")
-        with pjoin(self.save_dir, "stats.json").open("w") as fh:
-            json.dump(self.dataset_stats, fh, indent="\t")
+        # with pjoin(self.save_dir, "stats.json").open("w") as fh:
+        #     json.dump(self.dataset_stats, fh, indent="\t")
         with pjoin(self.save_dir, "stats.yaml").open("w") as fh:
             yaml.dump(self.dataset_stats, fh)
         if self.verbose: print("Done writing stats in {:.2f}s".format(time()-start))
