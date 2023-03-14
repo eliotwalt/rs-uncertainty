@@ -74,7 +74,7 @@ def configure_optimizers(model):
     return {'optimizers': optim, 'schedulers': scheduler}
 
 
-loggers = WandbLogger(project='forest_structure') if run['training.use_wandb_logger'] else None
+loggers = WandbLogger(project='UQ_evaluation') if run['training.use_wandb_logger'] else None
 
 run(
     model,

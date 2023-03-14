@@ -9,7 +9,7 @@ from latextable import Texttable, draw_latex
 sys.path.append('repo/src')
 
 
-PREDICTIONS_DIR = Path(sys.argv[1])
+PREDICTIONS_DIR = Path("results/dev/2023-03-14_15-45-23")
 PKL_DIR = Path('data/pkl/2021-05-18_10-57-45')
 GT_DIR = Path('data/preprocessed')
 NUM_VARS = 5

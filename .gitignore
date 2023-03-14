@@ -4,6 +4,8 @@ train_logs/
 ignore.*
 *.stdout
 *.stderr
+results/
+results_dev/
 
 
 # Byte-compiled / optimized / DLL files

@@ -14,7 +14,7 @@ import rasterio.features
 from torchvision.transforms import Compose, Normalize
 from blowtorch import Run
 
-sys.path.append('repo/src')
+sys.path.append('src')
 from models import ResNext
 from data import ToTensor, SelectChannels
 
@@ -25,11 +25,11 @@ def parse_date(date_str) -> datetime:
     return datetime.strptime(date_str, '%Y%m%d')
 
 
-run = Run(config_files=['repo/config/predict_testset.yaml'])
+run = Run(config_files=['config/predict_testset.yaml'])
 run.seed_all(12345)
 
-save_dir = Path('results/') / (datetime.now().strftime('%Y-%m-%d_%H-%M-%S') + (f'_{run["name"]}' if run['name'] else ''))
-save_dir.mkdir()
+save_dir = Path('results/dev/') / (datetime.now().strftime('%Y-%m-%d_%H-%M-%S') + (f'_{run["name"]}' if run['name'] else ''))
+save_dir.mkdir(parents=True)
 
 assert run['patch_size'] % 2 == 1, 'Patch size should be odd.'
 
@@ -75,7 +75,7 @@ for gt_file_path in Path(run['gt_dir']).glob('*.tif'):
         continue
 
     gt_file = rasterio.open(gt_file_path)
-    gt_mask = gt_file.read_masks(1).astype(np.bool)
+    gt_mask = gt_file.read_masks(1).astype(bool)
 
     with rasterio.open(Path(run['split_mask_dir']) / gt_file_path.name) as split_file:
         split_mask = split_file.read(1).astype('float16')
