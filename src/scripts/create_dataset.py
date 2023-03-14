@@ -54,8 +54,12 @@ class DatasetCreator:
         # save directory
         self.save_dir = pjoin(self.run["save_dir"], datetime.now().strftime('%Y-%m-%d_%H-%M-%S'))
         self.save_dir.mkdir(parents=True)
+        # create dataset
+        self.prange = trange
+
+    def create(self):
         # collect arguments
-        arg_dicts = []
+        args_dicts = []
         projects = self.run["projects"].copy()
         i, N = 0, len(projects)
         for gt_file_path in Path(self.run["gt_dir"]).glob("*.tif"):
@@ -64,7 +68,7 @@ class DatasetCreator:
                 projects.remove(gt_file_path.stem)
                 #project_dataset_stats = self._create_project_dataset(gt_file_path)
                 #self.dataset_stats[gt_file_path.stem] = project_dataset_stats
-                arg_dicts.append({
+                args_dicts.append({
                     "gt_file_path": gt_file_path,
                     "i": i, "N": N
                 })
@@ -72,9 +76,9 @@ class DatasetCreator:
         # create dataset
         start = time()
         if self.verbose: print("Processing projects")
-        with multiprocessing.Pool(processes=int(0.5*os.cpu_count())) as pool:
-            for project_dataset_stats, project_id in  pool.imap(self._create_project_dataset, arg_dicts):
-                self.dataset_stats[project_id] = project_dataset_stats
+        for args_dict in args_dicts:
+            project_dataset_stats, project_id = self._create_project_dataset(args_dict)
+            self.dataset_stats[project_id] = project_dataset_stats
         if self.verbose: print("Done processing projects in {}".format(timedelta(seconds=time()-start)))
         # save stats and config
         start = time()
@@ -94,7 +98,7 @@ class DatasetCreator:
         gt_file_path, i, N = args_dict["gt_file_path"], args_dict["i"], args_dict["N"]
         if self.verbose:
             start = time()
-            print(f"[{i}/{N}] Processing id {gt_file_path.stem} ({datetime.now().strftime('%Y-%m-%d_%H-%M-%S')})")
+            print(f"[{i}/{N}] Processing id {gt_file_path.stem} ({datetime.now().strftime('%H:%M:%S')})")
         # get project id
         project_id = gt_file_path.stem
         # initialize stats dict
@@ -286,8 +290,8 @@ class DatasetCreator:
         shape = gt_file.shape
         num_images_per_pixel = np.zeros((1, *shape), dtype=np.uint8)
         patch_half = self.run['patch_size'] // 2
-        # for i in trange(patch_half, gt_file.shape[0] - patch_half):
-        for i in range(patch_half, gt_file.shape[0] - patch_half):
+        for i in self.prange(patch_half, gt_file.shape[0] - patch_half):
+        # for i in range(patch_half, gt_file.shape[0] - patch_half):
             # if i==10: break # DEBUG
             for j in range(patch_half, gt_file.shape[1] - patch_half):
                 i_slice = slice(i - patch_half, i + patch_half + 1)
@@ -479,28 +483,55 @@ class DatasetCreator:
         if ax: ax.imshow(imap, cmap=matplotlib.colors.ListedColormap(["black", "white", "yellow", "blue", "red"])); return ax
         else: plt.imshow(imap, cmap=matplotlib.colors.ListedColormap(["black", "white", "yellow", "blue", "red"]))
 
-if __name__=="__main__":
-    import sys, os
-    root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-    cfg_file = sys.argv[1] if len(sys.argv)>2 and sys.argv[1]!="" else os.path.join(root, "config", "create_dataset-dev.yaml")
-    run = blowtorch.run.Run(config_files=[cfg_file])
-    dataset = DatasetCreator(run)
-    dataset.plot("346")
+class ParallelDatasetCreator(DatasetCreator):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.prange = range
+    
+    def create(self):
+        # collect arguments
+        args_dicts = []
+        projects = self.run["projects"].copy()
+        i, N = 0, len(projects)
+        for gt_file_path in Path(self.run["gt_dir"]).glob("*.tif"):
+            if gt_file_path.stem in projects:
+                i += 1
+                projects.remove(gt_file_path.stem)
+                #project_dataset_stats = self._create_project_dataset(gt_file_path)
+                #self.dataset_stats[gt_file_path.stem] = project_dataset_stats
+                args_dicts.append({
+                    "gt_file_path": gt_file_path,
+                    "i": i, "N": N
+                })
+                if len(projects) == 0: break
+        # create dataset
+        start = time()
+        if self.verbose: print("Processing projects")
+        with multiprocessing.Pool(processes=int(0.5*os.cpu_count())) as pool:
+            for project_dataset_stats, project_id in  pool.imap(self._create_project_dataset, args_dicts):
+                self.dataset_stats[project_id] = project_dataset_stats
+        if self.verbose: print("Done processing projects in {}".format(timedelta(seconds=time()-start)))
+        # save stats and config
+        start = time()
+        if self.verbose: print("Writing stats")
+        # with pjoin(self.save_dir, "stats.json").open("w") as fh:
+        #     json.dump(self.dataset_stats, fh, indent="\t")
+        with pjoin(self.save_dir, "stats.yaml").open("w") as fh:
+            yaml.dump(self.dataset_stats, fh)
+        if self.verbose: print("Done writing stats in {}".format(timedelta(seconds=time()-start)))
+        start = time()
+        if self.verbose: print("Writing config")
+        with pjoin(self.save_dir, "data_config.yaml").open("w") as fh:
+            yaml.dump(self.run.get_raw_config(), fh)
+        if self.verbose: print("Done writing config in {}".format(timedelta(seconds=time()-start)))
 
-    # class Test:
-    #     def __init__(self):
-    #         self.d = {}
-    #         args = [{"a": 1,"b": 1}, {"a": 4,"b": 3}, {"a": 2,"b": 2}]
-    #         with multiprocessing.Pool(processes=int(os.cpu_count()/2)) as pool:
-    #             for i, return_dict in enumerate(pool.imap(self.task, args)):
-    #                 self.d[str(i)] = return_dict
-    #                 print(f"got new result: {return_dict}")
-    #                 print(f"self.d is now: {self.d}")
-    #         print(f"end of execution: {self.d}")
-        
-    #     def task(self, args_dict):
-    #         a = args_dict["a"]
-    #         b = args_dict["b"]
-    #         return {"a": a, "b": b, "a*b": a*b}
-        
-    # test = Test()
+if __name__=="__main__":
+    import sys, os, argparse
+    root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    p = argparse.ArgumentParser()
+    p.add_argument("--cfg", help="config file", default=os.path.join(root, "config", "create_dataset-dev.yaml"))
+    p.add_argument("--parallel", help="whether to compute in parallel", action="store_true")
+    args = p.parse_args()
+    run = blowtorch.run.Run(config_files=[args.cfg])
+    creator = ParallelDatasetCreator(run) if args.parallel else DatasetCreator(run)
+    creator.create()
