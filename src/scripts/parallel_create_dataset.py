@@ -141,6 +141,7 @@ class DatasetCreator:
             if k in ["num_train", "num_test", "num_test"]: project_dataset_stats[k] += v
         if self.verbose:
             print(f"[{i}/{N}] Done processing id {gt_file_path.stem} in {str(timedelta(seconds=time()-start))}")
+        gt_file.close()
         return project_dataset_stats, project_id
 
     def _validate_run_config(self) -> None:
@@ -370,15 +371,29 @@ class DatasetCreator:
             offsets,
             labels,
         )
-        self._make_dataset_info(
-            project_id,
-            gt_file,
-            locations,
-            split_mask,
-            valid_mask,
-            rasterized_polygon
-        )
+        # self._make_dataset_info(
+        #     project_id,
+        #     gt_file,
+        #     locations,
+        #     split_mask,
+        #     valid_mask,
+        #     rasterized_polygon
+        # )
+        self._save_image_density(gt_file, project_id, num_images_per_pixel)
         return stats
+    
+    def _save_image_density(self, gt_file, project_id, num_images_per_pixel):
+        with rasterio.Env():
+            profile = gt_file.profile
+            profile.update(
+                driver='GTiff',
+                count=1,
+                compress='deflate',
+                nodata=None,
+                dtype='uint8'
+            )
+            with rasterio.open(pjoin(self.save_dir, f"num_images_per_pixel_{project_id}.tif"), "w", **profile) as f:
+                f.write(num_images_per_pixel)
     
     def _make_dataset_info(
         self,
