@@ -25,8 +25,7 @@ def parse_date(date_str) -> datetime:
     return datetime.strptime(date_str, '%Y%m%d')
 
 
-run = Run(config_files=['config/prepare_dataset.yaml'])
-print(run)
+run = Run(config_files=['config/create_dataset-dev.yaml'])
 run.seed_all(12345)
 
 save_dir = Path('data/forest_structure/pkl/' + datetime.now().strftime('%Y-%m-%d_%H-%M-%S'))

@@ -6,6 +6,7 @@ ignore.*
 *.stderr
 results/
 results_dev/
+*.euler.sh
 
 
 # Byte-compiled / optimized / DLL files

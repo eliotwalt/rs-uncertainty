@@ -52,7 +52,8 @@ class DatasetCreator:
         self.run.seed_all(self.seed)
         self.dataset_stats["seed"] = self.seed
         # save directory
-        self.save_dir = pjoin(self.run["save_dir"], datetime.now().strftime('%Y-%m-%d_%H-%M-%S'))
+        self.save_dir = self.run["save_dir"]
+        if self.save_dir.endswith("${datetime}"): self.save_dir = self.save_dir.replace("${datetime}", datetime.now().strftime('%Y-%m-%d_%H-%M-%S'))
         self.save_dir.mkdir(parents=True)
         # create dataset
         self.prange = trange
