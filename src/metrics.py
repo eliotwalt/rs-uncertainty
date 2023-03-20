@@ -1,6 +1,7 @@
 import numpy as np
 from itertools import chain
 import scipy.stats
+import yaml
 
 REGRESSION_METRICS = ["mae", "mae_p", "rmse", "rmse_p", "mbe", "mbe_p", "nll"]
 UQ_METRICS = ["uce", "uce_p", "ence", "ence_p", "auce", "r09", "c_v", "srp", "srp_p", "ause_rmse_p", "ause_uce_p"]
@@ -22,54 +23,55 @@ TODO:
 
 # Binned variance
 def binned_variance(diff, variance, n_bins, *args, **kwargs):
-        """
-        Compute mean MSE and mean variance in linear bins
+    """
+    Compute mean MSE and mean variance in linear bins
 
-        Args:
-        - variance (np.ndarray[d, n]): predicted variance for each variable (d) and each pixel in the dataset (n)
-        - diff (np.ndarray[d, n]): signed errors for each variable (d) and each pixel in the dataset (n)
-        - n_bins (int): number of bins
+    Args:
+    - variance (np.ndarray[d, n]): predicted variance for each variable (d) and each pixel in the dataset (n)
+    - diff (np.ndarray[d, n]): signed errors for each variable (d) and each pixel in the dataset (n)
+    - n_bins (int): number of bins
 
-        Returns:
-        - mean_mses (np.ndarray[n_bins]): mean MSE in each bin
-        - mean_vars (np.ndarray[n_bins]): mean variance in each bin
-        - histogram (np.ndarray[n_bins]): number of samples in each bin
-        """
-        # initialize
-        d = diff.shape[0]
-        histogram = -1*np.ones((d, n_bins))
-        mean_vars = -1*np.ones((d, n_bins))
-        mean_mses = -1*np.ones((d, n_bins))
-        # loop on variables
-        for i, (var, eps) in enumerate(zip(variance, diff)):
-            # Bin variance linearly and get sample indexes
-            bins = np.linspace(var.min(), var.max(), n_bins)
-            bins_ids = np.digitize(var, bins=bins)-1 # digitize is in [1, n_bins] => -1 makes [0, n_bins-1]
-            # loop on bins to compute stats
-            for bin_id in range(n_bins):
-                # bin mask
-                mask = bins_ids==bin_id
-                bin_var, bin_diff = var[mask], eps[mask]
-                # stats
-                histogram[i,bin_id] = mask.sum().astype(np.float32)
-                if histogram[i,bin_id]!=0: 
-                    mean_vars[i,bin_id] = bin_var.mean()
-                    mean_mses[i,bin_id] = (bin_diff**2).mean()
-                else: # empty bin!! set to NaN
-                    mean_vars[i,bin_id] = np.nan
-                    mean_mses[i,bin_id] = np.nan
-        assert (histogram>=0).all()
-        return mean_mses, mean_vars, histogram
+    Returns:
+    - mean_mses (np.ndarray[n_bins]): mean MSE in each bin
+    - mean_vars (np.ndarray[n_bins]): mean variance in each bin
+    - histogram (np.ndarray[n_bins]): number of samples in each bin
+    """
+    # initialize
+    d = diff.shape[0]
+    histogram = np.empty((d, n_bins))
+    mean_vars = np.empty((d, n_bins))
+    mean_mses = np.empty((d, n_bins))
+    # loop on variables
+    for i, (var, eps) in enumerate(zip(variance, diff)):
+        # Bin variance linearly and get sample indexes
+        bins = np.linspace(var.min(), var.max(), n_bins)
+        bins_ids = np.digitize(var, bins=bins)-1 # digitize is in [1, n_bins] => -1 makes [0, n_bins-1]
+        # loop on bins to compute stats
+        for bin_id in range(n_bins):
+            # bin mask
+            mask = bins_ids==bin_id
+            bin_var, bin_diff = var[mask], eps[mask]
+            # stats
+            histogram[i,bin_id] = mask.sum().astype(np.float32)
+            if histogram[i,bin_id]!=0: 
+                mean_vars[i,bin_id] = bin_var.mean()
+                mean_mses[i,bin_id] = (bin_diff**2).mean()
+            else: # empty bin!! set to NaN
+                mean_vars[i,bin_id] = np.nan
+                mean_mses[i,bin_id] = np.nan
+    # make sure the only nan and zeros correspond to each others
+    assert (np.isnan(mean_mses)==np.isnan(mean_vars)).all() and (np.isnan(mean_vars)==(histogram==0.)).all()
+    return mean_mses, mean_vars, histogram
 
 # Regression metrics
 def mae(diff, *args, **kwargs): return np.abs(diff).mean(1)
 def mse(diff, *args, **kwargs): return (diff**2).mean(1)
 def rmse(diff, *args, **kwargs): return np.sqrt((diff**2).mean(1))
 def mbe(diff, *args, **kwargs): return diff.mean(1)
-def mse_p(diff, *args, **kwargs): return (diff**2).mean(1)/diff.max(1)
-def rmse_p(diff, *args, **kwargs): return np.sqrt(rmse(diff, *args, **kwargs))
-def mae_p(diff, *args, **kwargs): return mae(diff, *args, **kwargs)/diff.max(1)
-def mbe_p(diff, *args, **kwargs): return mbe(diff, *args, **kwargs)/diff.max(1)
+def mse_p(diff, labels_mean, *args, **kwargs): return mse(diff)/labels_mean#return (diff**2).mean(1)/diff.max(1)
+def rmse_p(diff, labels_mean, *args, **kwargs): return rmse(diff)/labels_mean# return np.sqrt(rmse(diff, *args, **kwargs))
+def mae_p(diff, labels_mean, *args, **kwargs): return mae(diff)/labels_mean#return mae(diff, *args, **kwargs)/diff.max(1)
+def mbe_p(diff, labels_mean, *args, **kwargs): return mae(diff)/labels_mean#return mbe(diff, *args, **kwargs)/diff.max(1)
 
 def nll(diff, variance, nll_eps, *args, **kwargs):
     # avoid numerical issues
@@ -79,19 +81,19 @@ def nll(diff, variance, nll_eps, *args, **kwargs):
 
 # UQ metrics
 def uce(mean_mses, mean_vars, histogram, *args, **kwargs): 
-    return (histogram*np.abs(mean_vars-mean_mses)).mean(1) 
+    return np.nanmean(histogram*np.abs(mean_vars-mean_mses), axis=1)
 
 def uce_p(mean_mses, mean_vars, histogram, *args, **kwargs): 
-    return uce(mean_mses, mean_vars, histogram)/np.abs(mean_mses-mean_vars).max(1)
+    return uce(mean_mses, mean_vars, histogram)/np.nanmax(np.abs(mean_mses-mean_vars), axis=1)
 
 def ence(mean_mses, mean_vars, *args, **kwargs):
-    return (np.abs(mean_vars-mean_mses)/mean_vars).mean(1)
+    return np.nanmean(np.abs(mean_vars-mean_mses)/mean_vars, axis=1)
 
 def ence_p(mean_mses, mean_vars, histogram, *args, **kwargs):
     N = float(histogram[0].sum())
     M = float(histogram.shape[1])
-    phis = (np.abs(mean_vars-mean_mses)/mean_vars).max(1)
-    alphas = N*phis/M 
+    phis = np.nanmax(np.abs(mean_vars-mean_mses)/mean_vars, axis=1)
+    alphas = N*phis/M
     return ence(mean_mses, mean_vars)*alphas
 
 def empirical_accuracy(diff, variance, rho, *args, **kwargs):
@@ -127,11 +129,6 @@ def r09(diff, variance, *args, **kwargs):
 def c_v(variance, *args, **kwargs):
     n = variance.shape[1]
     mv = np.expand_dims(variance.mean(1), axis=1) # (d,1)
-    # print("var var:", (variance-mv).sum(1))
-    # print("n-1:", n-1)
-    # print("no sqrt:", (variance-mv).sum(1)/(n-1))
-    # print("sqrt:", np.sqrt((variance-mv).sum(1)/(n-1)))
-    # print("mv.squeeze(1):", mv.squeeze(1))
     return np.sqrt(((variance-mv)**2).sum(1)/(n-1))/mv.squeeze(1)
 
 def srp(variance, *args, **kwargs):
@@ -159,7 +156,7 @@ def ause(variance, metric, ause_m, *args, **kwargs):
         if isinstance(arg, np.ndarray): 
             arg = np.take_along_axis(arg, sorted_idx, axis=1)
     for k, v in kwargs.items():
-        if isinstance(v, np.ndarray):
+        if isinstance(v, np.ndarray) and k!="labels_mean":
             kwargs[k] = np.take_along_axis(v, sorted_idx, axis=1)
     # compute ause in each group (from all variance to little variance)
     for i in range(num_groups):
@@ -171,15 +168,8 @@ def ause(variance, metric, ause_m, *args, **kwargs):
             a[:,group_idx] if isinstance(a, np.ndarray) else a
             for a in args
         ]
-        # tmp_kwargs = {}
-        # for k,v in kwargs.items():
-        #     if isinstance(v, np.ndarray):
-        #         print("Reshaping: ", k, v.shape)
-        #         tmp_kwargs[k] = v[:,group_idx]
-        #     else:
-        #         tmp_kwargs[k] = v
         tmp_kwargs = {
-            k: v[:,group_idx] if isinstance(v, np.ndarray) else v
+            k: v[:,group_idx] if isinstance(v, np.ndarray) and k!="labels_mean" else v
             for k,v in kwargs.items()
         }
         tmp_kwargs["variance"]=tmp_var
@@ -205,6 +195,7 @@ class RUQMetrics:
     def __init__(
         self, 
         n_bins,
+        labels_mean,
         nll_eps=1e-06,
         n_rho=100,
         ause_m=.05,
@@ -215,6 +206,7 @@ class RUQMetrics:
     ):
         # attributes
         self.n_bins = n_bins
+        self.labels_mean = labels_mean
         self.nll_eps = nll_eps
         self.n_rho = n_rho
         self.ause_m = ause_m
@@ -223,9 +215,10 @@ class RUQMetrics:
         self.groups = groups
         self.variable_names = variable_names
         # accumulators: allow for running computations
+        self.diffs = {}
+        self.variances = {}
         self.metrics = {}
-        self.counts = {}
-        self.histograms = {}
+        self.groups = {group_id: [] for group_id in GROUPS.keys()}
 
     def add_project(self, project_id, mean, variance, gt):
         assert mean.shape == variance.shape == gt.shape
@@ -234,50 +227,88 @@ class RUQMetrics:
         mask = ~np.isnan(mean).all(0)
         diff = mean[:,mask]-gt[:,mask]
         variance = variance[:,mask]
-        # compute metrics
+        self.diffs[project_id] = diff 
+        self.variances[project_id] = variance
+        # add group
+        for group_id, group in GROUPS.items(): 
+            if project_id in group: 
+                self.groups[group_id].append(project_id)
+
+    def fill_metrics(self, key, diff, variance):
         mean_mses, mean_vars, histogram = binned_variance(diff, variance, self.n_bins)
-        self.metrics[project_id] = {
+        self.metrics[key] = {
             m: eval(m)(diff=diff, variance=variance, n_bins=self.n_bins,
-                       mean_mses=mean_mses, mean_vars=mean_vars, 
-                       histogram=histogram, n_rho=self.n_rho,
-                       ause_m=self.ause_m, nll_eps=self.nll_eps)
+                    mean_mses=mean_mses, mean_vars=mean_vars, 
+                    histogram=histogram, n_rho=self.n_rho,
+                    ause_m=self.ause_m, nll_eps=self.nll_eps,
+                    labels_mean=self.labels_mean)
             for m in chain(self.uq_metrics, self.regression_metrics)
         }
-        # update count
-        self.counts[project_id] = int(mask.sum())
-        self.histograms[project_id] = histogram.astype(np.int_)
-        # inspect metrics
         
-    def aggregate_metrics(self):
-        # compute CI for project statistics
-        raise NotImplementedError("project CI must be implemented")
-        # fill groups if needed
-        for group_id in self.groups:
-            raise NotImplementedError("group aggregation mut be implemented")
-        # fill global if needed
-        raise NotImplementedError("global aggregation mut be implemented")
+    def aggregate_entity(self, project_id=None, group_id=None, compute_intermediary=True):
+        assert not (project_id and group_id)
+        # single project
+        if project_id: entities, key = [project_id], project_id
+        # region group
+        elif group_id: entities, key = self.groups[group_id], group_id
+        # global aggregation
+        else: entities, key = list(chain(*list(self.groups.values()))), "global"
+        print("Aggregating entity: {} -> {} ()".format(key, entities, self.metrics.keys()))
+        # compute only if not existing
+        if not key in self.metrics.keys() and len(entities)>0:
+            diff, variance = None, None
+            for pid in entities:
+                diff_, variance_ = self.diffs[pid] , self.variances[pid]
+                diff = diff_ if diff is None else np.concatenate([diff, diff_], axis=1)
+                variance = variance_ if variance is None else np.concatenate([variance, variance_], axis=1)
+                # compute intermediary if needed
+                if compute_intermediary and not pid in self.metrics.keys():
+                    print("Computing single entity: {}".format(pid))
+                    self.fill_metrics(pid, diff_.copy(), variance_.copy())
+            # compute entity metrics if not yet done
+            if len(entities)>1: self.fill_metrics(key, diff, variance)
 
-if __name__ == "__main__":
+    def aggregate_all(self):
+        _ = self.aggregate_entity(compute_intermediary=True)
+        for group_id in GROUPS.keys(): _ = self.aggregate_entity(group_id=group_id, compute_intermediary=False)    
+
+def main(N_projects):
     from pathlib import Path
     import rasterio
+    import json
 
     PREDICTIONS_DIR = Path("results/dev/2023-03-14_15-45-23")
+    PKL_DIR = Path('data/pkl/2021-05-18_10-57-45')
     GT_DIR = Path('data/preprocessed')
 
-    ruq_metrics = RUQMetrics(n_bins=20)
-    
-    projects = EAST[:2]
+    with (PKL_DIR / 'stats.yaml').open() as fh:
+        # load training set statistics for data normalization
+        stats = yaml.safe_load(fh)
+        labels_mean = np.array(stats['labels_mean'])
 
+    ruq_metrics = RUQMetrics(n_bins=20, labels_mean=labels_mean)
+
+    i = 0
     for mean_file in PREDICTIONS_DIR.glob("*_mean.tif"):
         project = mean_file.stem.split("_")[0]
-        if project not in projects:
-            continue        
+        if project not in GLOBAL:
+            continue
         with rasterio.open(mean_file) as fh:
-            mean = fh.read(fh.indexes)
+            mean = fh.read(fh.indexes) #/np.expand_dims(labels_mean, axis=(1,2))
         with rasterio.open(PREDICTIONS_DIR / (project + '_variance.tif')) as fh:
-            variance = fh.read(fh.indexes)
+            variance = fh.read(fh.indexes) #/np.expand_dims(labels_mean, axis=(1,2))
         with rasterio.open(GT_DIR / (project + '.tif')) as fh:
             gt = fh.read(fh.indexes)
             gt_mask = fh.read_masks(1).astype(bool) 
-        
+        print(f"Adding {project}")
         ruq_metrics.add_project(project, mean, variance, gt)
+        i += 1
+        if i==N_projects: break
+        
+    ruq_metrics.aggregate_all()
+    for entity, em in ruq_metrics.metrics.items():
+        print(f"{entity}:")
+        for m, vs in em.items():
+            print(f"    {m}: {', '.join(['{:.3f}'.format(v) for v in vs])}")
+
+if __name__ == "__main__": main(2)
