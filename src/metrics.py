@@ -372,7 +372,10 @@ def test():
         uce = 0.5*(np.abs(var_min-eps**2)+np.abs(var_max-eps**2)),
         ence = (np.abs(var_min-eps**2)/var_min+np.abs(var_max-eps**2)/var_max)/N,
         auce = area_under_spline(nd_rho, np.abs(nd_rho-expected_accs)),
-        r09 = (0.5*(scipy.stats.norm.ppf((1+0.9)/2)*var_min+scipy.stats.norm.ppf((1+0.9)/2)*var_max)).mean(1),
+        r09 = 0.5*(
+            (np.abs(eps)<scipy.stats.norm.ppf((1+.9)/2)*np.sqrt(var_min)).astype(np.float32) + \
+            (np.abs(eps)<scipy.stats.norm.ppf((1+.9)/2)*np.sqrt(var_max)).astype(np.float32)
+        ),
         c_v = np.sqrt(N/(N-1)*(var_min**2+var_max**2))/(var_min+var_max),
         srp = (var_min+var_max)/2,
         ause_rmse_p = 3*ause_m*np.abs(eps)/(2*np.abs(labels_mean)),
