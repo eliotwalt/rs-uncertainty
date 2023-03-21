@@ -3,7 +3,7 @@ from itertools import chain
 import scipy.stats
 import yaml
 
-REGRESSION_METRICS = ["mae", "mae_p", "rmse", "rmse_p", "mbe", "mbe_p", "nll"]
+REGRESSION_METRICS = ["mse", "mse_p", "mae", "mae_p", "rmse", "rmse_p", "mbe", "mbe_p", "nll", "nll_p"]
 UQ_METRICS = ["uce", "uce_p", "ence", "ence_p", "auce", "r09", "c_v", "srp", "srp_p", "ause_rmse_p", "ause_uce_p"]
 VARIABLE_NAMES = ['P95', 'MeanH', 'Dens', 'Gini', 'Cover']
 EAST = ['346', '9', '341', '354', '415', '418', '416', '429', '439', '560', '472', '521', '498',
@@ -63,56 +63,60 @@ def binned_variance(diff, variance, n_bins, *args, **kwargs):
     assert (np.isnan(mean_mses)==np.isnan(mean_vars)).all() and (np.isnan(mean_vars)==(histogram==0.)).all()
     return mean_mses, mean_vars, histogram
 
+def area_under_spline(x, y):
+    return 0.5*((x[:,1:]-x[:,:-1])*(y[:,:-1]+y[:,1:])).sum(1)
+
 # Regression metrics
 def mae(diff, *args, **kwargs): return np.abs(diff).mean(1)
 def mse(diff, *args, **kwargs): return (diff**2).mean(1)
 def rmse(diff, *args, **kwargs): return np.sqrt((diff**2).mean(1))
 def mbe(diff, *args, **kwargs): return diff.mean(1)
-def mse_p(diff, labels_mean, *args, **kwargs): return mse(diff)/labels_mean#return (diff**2).mean(1)/diff.max(1)
-def rmse_p(diff, labels_mean, *args, **kwargs): return rmse(diff)/labels_mean# return np.sqrt(rmse(diff, *args, **kwargs))
-def mae_p(diff, labels_mean, *args, **kwargs): return mae(diff)/labels_mean#return mae(diff, *args, **kwargs)/diff.max(1)
-def mbe_p(diff, labels_mean, *args, **kwargs): return mae(diff)/labels_mean#return mbe(diff, *args, **kwargs)/diff.max(1)
+def mse_p(diff, labels_mean, *args, **kwargs): return mse(diff)/labels_mean**2 #return (diff**2).mean(1)/diff.max(1)
+def rmse_p(diff, labels_mean, *args, **kwargs): return rmse(diff)/np.abs(labels_mean) # return np.sqrt(rmse(diff, *args, **kwargs))
+def mae_p(diff, labels_mean, *args, **kwargs): return mae(diff)/np.abs(labels_mean) #return mae(diff, *args, **kwargs)/diff.max(1)
+def mbe_p(diff, labels_mean, *args, **kwargs): return mbe(diff)/labels_mean #return mbe(diff, *args, **kwargs)/diff.max(1)
 
 def nll(diff, variance, nll_eps, *args, **kwargs):
-    # avoid numerical issues
     v = variance
-    v[v<nll_eps] = nll_eps
-    return 0.5 * (np.log(v) + (diff/v)**2).mean(1)
+    v[v<nll_eps] = nll_eps # avoid numerical issues
+    return 0.5 * (np.log(v) + (diff**2)/v).mean(1)
+
+def nll_p(diff, variance, nll_eps, labels_mean, *args, **kwargs): return nll(diff, variance, nll_eps)/labels_mean**2
 
 # UQ metrics
 def uce(mean_mses, mean_vars, histogram, *args, **kwargs): 
-    return np.nanmean(histogram*np.abs(mean_vars-mean_mses), axis=1)
+    N = histogram[0].sum()
+    return np.nansum(histogram*np.abs(mean_vars-mean_mses), axis=1)/N
 
-def uce_p(mean_mses, mean_vars, histogram, *args, **kwargs): 
-    return uce(mean_mses, mean_vars, histogram)/np.nanmax(np.abs(mean_mses-mean_vars), axis=1)
+# def uce_p(mean_mses, mean_vars, histogram, *args, **kwargs): 
+#     return uce(mean_mses, mean_vars, histogram)/np.nanmax(np.abs(mean_mses-mean_vars), axis=1)
+def uce_p(mean_mses, mean_vars, histogram, labels_mean, *args, **kwargs): 
+    return uce(mean_mses, mean_vars, histogram)/labels_mean**2
 
-def ence(mean_mses, mean_vars, *args, **kwargs):
-    return np.nanmean(np.abs(mean_vars-mean_mses)/mean_vars, axis=1)
+def ence(mean_mses, mean_vars, histogram, *args, **kwargs):
+    N = histogram[0].sum()
+    return np.nansum(np.abs(mean_vars-mean_mses)/mean_vars, axis=1)/N
 
-def ence_p(mean_mses, mean_vars, histogram, *args, **kwargs):
-    N = float(histogram[0].sum())
-    M = float(histogram.shape[1])
-    phis = np.nanmax(np.abs(mean_vars-mean_mses)/mean_vars, axis=1)
-    alphas = N*phis/M
-    return ence(mean_mses, mean_vars)*alphas
+def ence_p(mean_mses, mean_vars, histogram, labels_mean, *args, **kwargs):
+    return ence(mean_mses, mean_vars, histogram)/np.abs(labels_mean)
 
 def empirical_accuracy(diff, variance, rho, *args, **kwargs):
     N = diff.shape[1]
     # intervals
-    half_width = scipy.stats.norm.ppf((1+rho)/2)*variance # (d,n)
+    half_width = scipy.stats.norm.ppf((1+rho)/2)*np.sqrt(variance) # (d,n)
     # compute acc
     empirical_acc = np.count_nonzero(np.abs(diff)<half_width, axis=1)/N
     return empirical_acc
 
-def auce(diff, variance, n_rho, *args, **kwargs):
+def auce(diff, variance, n_rho, rho_min, rho_max, *args, **kwargs):
     """
     From diff:
         -CDF^-1((rho+1)/2)*variance < diff < CDF^-1((rho+1)/2)*variance
         => |diff| < CDF^-1((rho+1)/2)*variance
     """
-    N = diff.shape[1]
+    d, N = diff.shape
     # accuracies
-    expected_accs = np.linspace(0, 1, n_rho) # (n_rho,)
+    expected_accs = np.linspace(rho_min, rho_max, n_rho) # (n_rho,)
     empirical_accs = []
     for rho in expected_accs:
         # compute empirical acc
@@ -120,8 +124,10 @@ def auce(diff, variance, n_rho, *args, **kwargs):
         empirical_accs.append(np.expand_dims(empirical_acc, axis=1))
     # make arr
     empirical_accs = np.concatenate(empirical_accs, axis=1) # (d,n_rho)
-    # average across rho
-    return np.abs(empirical_accs-expected_accs).mean(1) # (d,)
+    expected_accs = np.stack([expected_accs]*d, axis=0)
+    # compute AU
+    au = area_under_spline(x=expected_accs, y=np.abs(expected_accs-empirical_accs))
+    return au
 
 def r09(diff, variance, *args, **kwargs): 
     return empirical_accuracy(diff, variance, rho=0.9)
@@ -134,8 +140,10 @@ def c_v(variance, *args, **kwargs):
 def srp(variance, *args, **kwargs):
     return variance.mean(1)
 
-def srp_p(variance, *args, **kwargs):
-    return srp(variance, *args, **kwargs)/variance.max(1)
+# def srp_p(variance, *args, **kwargs):
+#     return srp(variance, *args, **kwargs)/variance.max(1)
+def srp_p(variance, labels_mean, *args, **kwargs):
+    return srp(variance, *args, **kwargs)/labels_mean**2
 
 def ause(variance, metric, ause_m, *args, **kwargs):
     """
@@ -183,7 +191,7 @@ def ause(variance, metric, ause_m, *args, **kwargs):
         if not len(err.shape)==2: err = np.expand_dims(err, axis=1)
         sc.append(err)
     sc = np.concatenate(sc, axis=1) # (d, num_groups)
-    return sc.mean(1) # riemann sum is just the mean
+    return sc.mean(1)*ause_m
 
 def ause_rmse_p(variance, ause_m, *args, **kwargs):
     return ause(variance, rmse_p, ause_m, *args, **kwargs)
@@ -198,6 +206,8 @@ class RUQMetrics:
         labels_mean,
         nll_eps=1e-06,
         n_rho=100,
+        rho_min=1e-3,
+        rho_max=1e-3,
         ause_m=.05,
         regression_metrics=REGRESSION_METRICS,
         uq_metrics=UQ_METRICS,
@@ -209,6 +219,8 @@ class RUQMetrics:
         self.labels_mean = labels_mean
         self.nll_eps = nll_eps
         self.n_rho = n_rho
+        self.rho_min = rho_min 
+        self.rho_max = rho_max 
         self.ause_m = ause_m
         self.regression_metrics = regression_metrics
         self.uq_metrics = uq_metrics
@@ -236,12 +248,14 @@ class RUQMetrics:
 
     def fill_metrics(self, key, diff, variance):
         mean_mses, mean_vars, histogram = binned_variance(diff, variance, self.n_bins)
-        self.metrics[key] = {
-            m: eval(m)(diff=diff, variance=variance, n_bins=self.n_bins,
+        all_kwargs = dict(diff=diff, variance=variance, n_bins=self.n_bins,
                     mean_mses=mean_mses, mean_vars=mean_vars, 
                     histogram=histogram, n_rho=self.n_rho,
                     ause_m=self.ause_m, nll_eps=self.nll_eps,
-                    labels_mean=self.labels_mean)
+                    labels_mean=self.labels_mean, rho_min=self.rho_min,
+                    rho_max=self.rho_max)
+        self.metrics[key] = {
+            m: eval(m)(**all_kwargs)
             for m in chain(self.uq_metrics, self.regression_metrics)
         }
         
@@ -311,4 +325,67 @@ def main(N_projects):
         for m, vs in em.items():
             print(f"    {m}: {', '.join(['{:.3f}'.format(v) for v in vs])}")
 
-if __name__ == "__main__": main(2)
+def test():
+    import json
+    # dims
+    d, N = (2,30)
+    # params
+    nll_eps = 1e-10
+    n_bins = 2
+    n_rho = 3
+    rho_min = 1e-3
+    rho_max = 1-1e-3
+    rho = np.linspace(rho_min, rho_max, n_rho)
+    ause_m = .5
+    # generate data
+    eps = np.random.randn(d,1)
+    gt = np.random.randn(d, N)
+    mean = gt + eps
+    variance = np.concatenate([np.exp(1)*np.ones((d, int(N/2))), np.exp(2)*np.ones((d, int(N/2)))], axis=1)
+    assert (variance>nll_eps).all()
+    var_min = np.exp(1)*np.ones((d,1))
+    var_max = np.exp(2)*np.ones((d,1))
+    labels_mean = 2*np.ones((d, 1))
+    # binning
+    true_binning = np.array([eps**2, eps**2]).squeeze(-1).transpose(), np.concatenate([var_min, var_max], axis=1), np.array([[N/2, N/2], [N/2, N/2]])
+    pred_binning = binned_variance(mean-gt, variance, n_bins)
+    for name, true, pred in zip(["mean_mses", "mean_vars", "histogram"], true_binning, pred_binning):
+        print("[{}: {}] target={}, computed={}".format(name, np.allclose(pred, true), list(true), list(pred)))
+    # compute metrics
+    ruq = RUQMetrics(n_bins=n_bins, labels_mean=labels_mean, nll_eps=nll_eps, 
+                     rho_min=rho_min, rho_max=rho_max, n_rho=n_rho, ause_m=ause_m,
+                     variable_names=["dumb"]*d)
+    ruq.add_project(project_id=EAST[0], mean=mean, variance=variance, gt=gt)
+    ruq.aggregate_entity(EAST[0])
+    # gt metrics
+    expected_accs = 0.5*(
+        (np.abs(eps)<scipy.stats.norm.ppf((1+rho)/2)*np.sqrt(var_min)).astype(np.float32) + \
+        (np.abs(eps)<scipy.stats.norm.ppf((1+rho)/2)*np.sqrt(var_max)).astype(np.float32)
+    )
+    nd_rho = np.stack([rho]*d, axis=0)
+    gt_metrics = dict(
+        mse = eps**2,
+        mae = np.abs(eps),
+        rmse = np.abs(eps),
+        mbe = eps,
+        nll = 1/4*(3+eps**2*(1/var_min+1/var_max)),
+        uce = 0.5*(np.abs(var_min-eps**2)+np.abs(var_max-eps**2)),
+        ence = (np.abs(var_min-eps**2)/var_min+np.abs(var_max-eps**2)/var_max)/N,
+        auce = area_under_spline(nd_rho, np.abs(nd_rho-expected_accs)),
+        r09 = (0.5*(scipy.stats.norm.ppf((1+0.9)/2)*var_min+scipy.stats.norm.ppf((1+0.9)/2)*var_max)).mean(1),
+        c_v = np.sqrt(N/(N-1)*(var_min**2+var_max**2))/(var_min+var_max),
+        srp = (var_min+var_max)/2,
+        ause_rmse_p = 3*ause_m*np.abs(eps)/(2*np.abs(labels_mean)),
+        ause_uce_p = ause_m/(2*labels_mean**2)*(3*np.abs(var_min-eps**2)+np.abs(var_max-eps**2))
+    )
+    # compare
+    results = {}
+    for k in gt_metrics.keys():
+        gtm = gt_metrics[k] if len(gt_metrics[k].shape)==1 else gt_metrics[k].squeeze(1)
+        rum = ruq.metrics[EAST[0]][k]
+        print("[{}: {}] target={}, computed={}, diff={}, ratio={}".format(k, np.allclose(gtm, rum), gtm, rum, list(gtm-rum), list(gtm/rum)))
+        results[k] = {"same": np.allclose(gtm, rum), "error": list(gtm-rum)}
+
+if __name__ == "__main__": 
+    # main(2)
+    test()
