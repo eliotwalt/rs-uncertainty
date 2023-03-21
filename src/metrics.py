@@ -134,8 +134,10 @@ def r09(diff, variance, *args, **kwargs):
 
 def c_v(variance, *args, **kwargs):
     n = variance.shape[1]
-    mv = np.expand_dims(variance.mean(1), axis=1) # (d,1)
-    return np.sqrt(((variance-mv)**2).sum(1)/(n-1))/mv.squeeze(1)
+    std = np.sqrt(variance)
+    mv = np.expand_dims(std.mean(1), axis=1) # (d,1)
+    return np.sqrt(n/(n-1)*((std-mv)**2).sum(1))/mv.squeeze(1)
+    # return np.sqrt(((std-mv)**2).sum(1)/(n-1))/mv.squeeze(1)
 
 def srp(variance, *args, **kwargs):
     return variance.mean(1)
@@ -338,13 +340,16 @@ def test():
     rho = np.linspace(rho_min, rho_max, n_rho)
     ause_m = .5
     # generate data
-    eps = np.random.randn(d,1)
+    eps = 10*np.random.randn(d,1)
     gt = np.random.randn(d, N)
     mean = gt + eps
     variance = np.concatenate([np.exp(1)*np.ones((d, int(N/2))), np.exp(2)*np.ones((d, int(N/2)))], axis=1)
     assert (variance>nll_eps).all()
     var_min = np.exp(1)*np.ones((d,1))
     var_max = np.exp(2)*np.ones((d,1))
+    std_min = np.sqrt(var_min)
+    std_max = np.sqrt(var_max)
+    std_mean = (std_min+std_max)/2
     labels_mean = 2*np.ones((d, 1))
     # binning
     true_binning = np.array([eps**2, eps**2]).squeeze(-1).transpose(), np.concatenate([var_min, var_max], axis=1), np.array([[N/2, N/2], [N/2, N/2]])
@@ -376,7 +381,14 @@ def test():
             (np.abs(eps)<scipy.stats.norm.ppf((1+.9)/2)*np.sqrt(var_min)).astype(np.float32) + \
             (np.abs(eps)<scipy.stats.norm.ppf((1+.9)/2)*np.sqrt(var_max)).astype(np.float32)
         ),
-        c_v = np.sqrt(N/(N-1)*(var_min**2+var_max**2))/(var_min+var_max),
+        # c_v = np.sqrt(
+        #     N**2/(2*(N-1))*(
+        #         np.sqrt(
+        #             ( np.sqrt(var_min)+ np.sqrt(var_max))**2+(3* np.sqrt(var_max)- np.sqrt(var_min))**2
+        #         )
+        #     )
+        # )/( np.sqrt(var_min)+ np.sqrt(var_max)),
+        c_v = 2*np.abs(std_max-std_mean)*np.sqrt(N/(N-1)),
         srp = (var_min+var_max)/2,
         ause_rmse_p = 3*ause_m*np.abs(eps)/(2*np.abs(labels_mean)),
         ause_uce_p = ause_m/(2*labels_mean**2)*(3*np.abs(var_min-eps**2)+np.abs(var_max-eps**2))
