@@ -2,7 +2,9 @@
 
 # ************************************************** HELPSTRING **************************************************
 read -r -d '' HELP << HELPSTRING
-Create dataset on Euler.
+Create dataset on Euler
+This script generates and submits batch jobs on Euler to generate a dataset. Creation is done as a job array while
+statistic aggregation is performed once all scripts have finished.
 Usage:
     -j | --job_name   : Slurm job name
     -c | --cfg        : path to configuration file
@@ -77,8 +79,8 @@ TTT
 # make_aggregation_job_script() {
     # fill template
 #         readarray -t -d '\n\t' template << TTT
-#         #SBATCH -n 2
-#         #SBATCH --time=1:30:00
+#         #SBATCH -n 1
+#         #SBATCH --time=15:00
 #         #SBATCH --mem-per-cpu=2000
 #         #SBATCH --tmp=4000
 #         #SBATCH --job-name=$JOB_NAME
@@ -89,6 +91,8 @@ TTT
 #         python /scratch/ewalt/pdm/rs-uncertainty/src/scripts/create_dataset.py \
 #             --aggregate \
 #             --cfg cfg
+
+        # rm -r $out $cfg
 # TTT
 # }
 
