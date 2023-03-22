@@ -4,7 +4,7 @@ import scipy.stats
 import yaml
 
 REGRESSION_METRICS = ["mse", "mse_p", "mae", "mae_p", "rmse", "rmse_p", "mbe", "mbe_p", "nll", "nll_p"]
-UQ_METRICS = ["uce", "uce_p", "ence", "ence_p", "auce", "r09", "c_v", "srp", "srp_p", "ause_rmse_p", "ause_uce_p"]
+UQ_METRICS = ["uce", "uce_p", "ence", "ence_p", "auce", "r09", "c_v", "srp", "srp_p", "ause_rmse", "ause_uce"]
 VARIABLE_NAMES = ['P95', 'MeanH', 'Dens', 'Gini', 'Cover']
 EAST = ['346', '9', '341', '354', '415', '418', '416', '429', '439', '560', '472', '521', '498',
         '522', '564', '764', '781', '825', '796', '805', '827', '891', '835', '920', '959', '1023', '998',
@@ -153,12 +153,12 @@ def ause(variance, metric, ause_m, *args, **kwargs):
     """
     # remove binned kwargs
     [kwargs.pop(kw, None) for kw in ["mean_mses", "mean_vars", "histogram"]]
-    # sparsification curve
-    sc = [] 
     # dims
     d, n = variance.shape
     n_rm = int(n*ause_m)
     num_groups = int(n/n_rm)
+    # sparsification curve
+    sc = [] 
     # sort all arrays by variance index
     sorted_idx = np.argsort(variance, axis=1)
     variance = np.take_along_axis(variance, sorted_idx, axis=1)
@@ -192,14 +192,17 @@ def ause(variance, metric, ause_m, *args, **kwargs):
         err = metric(*tmp_args, **tmp_kwargs)
         if not len(err.shape)==2: err = np.expand_dims(err, axis=1)
         sc.append(err)
-    sc = np.concatenate(sc, axis=1) # (d, num_groups)
-    return sc.mean(1)*ause_m
+    # prepare curve
+    sc.append(np.zeros((d,1)))
+    y = np.concatenate(sc[::-1], axis=1) # (d, num_groups)
+    x = np.stack([np.arange(0,1+ause_m,ause_m)]*d, axis=0)
+    return area_under_spline(x,y)
 
-def ause_rmse_p(variance, ause_m, *args, **kwargs):
-    return ause(variance, rmse_p, ause_m, *args, **kwargs)
+def ause_rmse(variance, ause_m, *args, **kwargs):
+    return ause(variance, rmse, ause_m, *args, **kwargs)
 
-def ause_uce_p(variance, ause_m, *args, **kwargs):
-    return ause(variance, uce_p, ause_m, *args, **kwargs)
+def ause_uce(variance, ause_m, *args, **kwargs):
+    return ause(variance, uce, ause_m, *args, **kwargs)
 
 class RUQMetrics:
     def __init__(
@@ -327,10 +330,9 @@ def main(N_projects):
         for m, vs in em.items():
             print(f"    {m}: {', '.join(['{:.3f}'.format(v) for v in vs])}")
 
-def test():
-    import json
+def test(d=2, verbose=True):
     # dims
-    d, N = (2,30)
+    d, N = (d,30)
     # params
     nll_eps = 1e-10
     n_bins = 2
@@ -338,6 +340,7 @@ def test():
     rho_min = 1e-3
     rho_max = 1-1e-3
     rho = np.linspace(rho_min, rho_max, n_rho)
+    nd_rho = np.stack([rho]*d, axis=0)
     ause_m = .5
     # generate data
     eps = 10*np.random.randn(d,1)
@@ -352,10 +355,11 @@ def test():
     std_mean = (std_min+std_max)/2
     labels_mean = 2*np.ones((d, 1))
     # binning
-    true_binning = np.array([eps**2, eps**2]).squeeze(-1).transpose(), np.concatenate([var_min, var_max], axis=1), np.array([[N/2, N/2], [N/2, N/2]])
+    true_binning = np.array([eps**2, eps**2]).squeeze(-1).transpose(), np.concatenate([var_min, var_max], axis=1), np.array([[N/2, N/2]]*d)
     pred_binning = binned_variance(mean-gt, variance, n_bins)
-    for name, true, pred in zip(["mean_mses", "mean_vars", "histogram"], true_binning, pred_binning):
-        print("[{}: {}] target={}, computed={}".format(name, np.allclose(pred, true), list(true), list(pred)))
+    if verbose:
+        for name, true, pred in zip(["mean_mses", "mean_vars", "histogram"], true_binning, pred_binning):
+            print("[{}: {}] target={}, computed={}".format(name, np.allclose(pred, true), list(true), list(pred)))
     # compute metrics
     ruq = RUQMetrics(n_bins=n_bins, labels_mean=labels_mean, nll_eps=nll_eps, 
                      rho_min=rho_min, rho_max=rho_max, n_rho=n_rho, ause_m=ause_m,
@@ -367,7 +371,6 @@ def test():
         (np.abs(eps)<scipy.stats.norm.ppf((1+rho)/2)*np.sqrt(var_min)).astype(np.float32) + \
         (np.abs(eps)<scipy.stats.norm.ppf((1+rho)/2)*np.sqrt(var_max)).astype(np.float32)
     )
-    nd_rho = np.stack([rho]*d, axis=0)
     gt_metrics = dict(
         mse = eps**2,
         mae = np.abs(eps),
@@ -381,26 +384,47 @@ def test():
             (np.abs(eps)<scipy.stats.norm.ppf((1+.9)/2)*np.sqrt(var_min)).astype(np.float32) + \
             (np.abs(eps)<scipy.stats.norm.ppf((1+.9)/2)*np.sqrt(var_max)).astype(np.float32)
         ),
-        # c_v = np.sqrt(
-        #     N**2/(2*(N-1))*(
-        #         np.sqrt(
-        #             ( np.sqrt(var_min)+ np.sqrt(var_max))**2+(3* np.sqrt(var_max)- np.sqrt(var_min))**2
-        #         )
-        #     )
-        # )/( np.sqrt(var_min)+ np.sqrt(var_max)),
         c_v = np.sqrt(N*(std_max-std_min)**2/(4*(N-1)))/std_mean,
         srp = (var_min+var_max)/2,
-        ause_rmse_p = 3*ause_m*np.abs(eps)/(2*np.abs(labels_mean)),
-        ause_uce_p = ause_m/(2*labels_mean**2)*(3*np.abs(var_min-eps**2)+np.abs(var_max-eps**2))
+        ause_rmse = area_under_spline(
+            x=np.stack([np.arange(0,1+ause_m,ause_m)]*d, axis=0),
+            y=np.stack([
+                np.zeros((d,1)),
+                np.abs(eps),
+                np.abs(eps)
+            ], axis=1).squeeze(-1)
+        ),
+        ause_uce = area_under_spline(
+            x=np.stack([np.arange(0,1+ause_m,ause_m)]*d, axis=0),
+            y=np.stack([
+                np.zeros((d,1)),
+                np.abs(var_min-eps**2),
+                (np.abs(var_min-eps**2)+np.abs(var_max-eps**2))/2
+            ], axis=1).squeeze(-1)
+        )
     )
     # compare
     results = {}
     for k in gt_metrics.keys():
         gtm = gt_metrics[k] if len(gt_metrics[k].shape)==1 else gt_metrics[k].squeeze(1)
         rum = ruq.metrics[EAST[0]][k]
-        print("[{}: {}] target={}, computed={}, diff={}, ratio={}".format(k, np.allclose(gtm, rum), gtm, rum, list(gtm-rum), list(gtm/rum)))
+        if verbose: print("[{}: {}] target={}, computed={}, diff={}, ratio={}".format(k, np.allclose(gtm, rum), gtm, rum, list(gtm-rum), list(gtm/rum)))
         results[k] = {"same": np.allclose(gtm, rum), "error": list(gtm-rum)}
+    return results
+
+def multi_test():
+    import json
+    all_results = []
+    num_runs = 10
+    for _ in range(num_runs):
+        for d in range(2, 10, 1):
+            all_results.append(test(d, False))
+    same_dict = {k: True for k in all_results[0].keys()}
+    for results in all_results:
+        for k in results.keys():
+            same_dict[k] = results[k]["same"] and same_dict[k]
+    print(json.dumps(same_dict, indent=2))
 
 if __name__ == "__main__": 
     # main(2)
-    test()
+    multi_test()
