@@ -136,7 +136,7 @@ def c_v(variance, *args, **kwargs):
     n = variance.shape[1]
     std = np.sqrt(variance)
     mv = np.expand_dims(std.mean(1), axis=1) # (d,1)
-    return np.sqrt(n/(n-1)*((std-mv)**2).sum(1))/mv.squeeze(1)
+    return np.sqrt(1/(n-1)*((std-mv)**2).sum(1))/mv.squeeze(1)
     # return np.sqrt(((std-mv)**2).sum(1)/(n-1))/mv.squeeze(1)
 
 def srp(variance, *args, **kwargs):
@@ -388,7 +388,7 @@ def test():
         #         )
         #     )
         # )/( np.sqrt(var_min)+ np.sqrt(var_max)),
-        c_v = 2*np.abs(std_max-std_mean)*np.sqrt(N/(N-1)),
+        c_v = np.sqrt(N*(std_max-std_min)**2/(4*(N-1)))/std_mean,
         srp = (var_min+var_max)/2,
         ause_rmse_p = 3*ause_m*np.abs(eps)/(2*np.abs(labels_mean)),
         ause_uce_p = ause_m/(2*labels_mean**2)*(3*np.abs(var_min-eps**2)+np.abs(var_max-eps**2))
