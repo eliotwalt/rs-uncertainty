@@ -112,10 +112,12 @@ echo "Saved sub config files: $tmp"
 
 # *(2)* Generate creation scripts
 job_ids=()
+outs=()
 for sub in "${sub_cfgs[@]}"
 do
     # get sub id from config file name
     out=${sub:0:(-5)}.sh
+    outs+=($out)
     # generate script
     make_creation_job_script $sub $out
     # submit
@@ -130,3 +132,4 @@ echo "Slurm job ids: ${job_ids[@]}"
 
 # *(3)* Generate aggregation script
 # make_aggregation_job_script ${job_ids[@]} ${sub_cfgs[@]}
+rm ${sub_cfgs} ${outs} 
