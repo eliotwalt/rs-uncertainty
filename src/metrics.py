@@ -268,7 +268,7 @@ class RUQMetrics:
         assert not (project_id and group_id)
         # single project
         if project_id: entities, key = [project_id], project_id
-        # region group
+        # group
         elif group_id: entities, key = self.groups[group_id], group_id
         # global aggregation
         else: entities, key = list(chain(*list(self.groups.values()))), "global"
