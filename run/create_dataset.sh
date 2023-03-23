@@ -6,24 +6,19 @@ Create dataset on Euler
 This script generates and submits batch jobs on Euler to generate a dataset. Creation is done as a job array while
 statistic aggregation is performed once all scripts have finished.
 Usage:
-    -j | --job_name   : Slurm job name
-    -c | --cfg        : path to configuration file
-    -a | --array_size : number of projects in each array job
+    -c | --cfg                  : path to configuration file
+    -n | --num_projects_per_job : number of projects in each array job
 HELPSTRING
 
 # ************************************************** ARGUMENTS ***************************************************
 # source: https://stackabuse.com/how-to-parse-command-line-arguments-in-bash/
-SHORT=j:,c:,s:,h
-LONG=job_name:,cfg:,array_size:,help
+SHORT=,c:,s:,h
+LONG=cfg:,array_size:,help
 OPTS=$(getopt -a -n dataset_creation --options $SHORT --longoption $LONG -- "$@")
 eval set -- "$OPTS"
 while :
 do
   case "$1" in
-    -j | --job_name )
-      JOB_NAME="$2"
-      shift 2
-      ;;
     -c | --cfg )
       CFG="$2"
       shift 2
