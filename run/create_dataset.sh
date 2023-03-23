@@ -56,7 +56,7 @@ echo "Num projects per job : $NUM_PROJECTS_PER_JOB"
 read -r -a sub_cfgs <<< `python /cluster/work/igp_psr/elwalt/pdm/rs-uncertainty/src/scripts/create_dataset.py --configure ${ARGS[@]}`
 CFG=${sub_cfgs[0]}
 sub_cfgs=${sub_cfgs[@]:1}
-echo "Saved sub config files: $(basename $CFG)"
+echo "Saved sub config files: $(dirname $CFG)"
 
 # *(2)* Submit preprocessing jobs
 echo "Submitting preprocessing job array ..."
