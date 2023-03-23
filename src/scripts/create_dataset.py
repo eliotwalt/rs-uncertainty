@@ -521,7 +521,7 @@ def configure(cfg_f, num_projects_per_job):
         sub_save_dir = pjoin(save_dir, str(uuid4()))
         while sub_save_dir in sub_save_dirs: sub_save_dir = pjoin(save_dir, str(uuid4()))
         sub_save_dir.mkdir(parents=False)
-        cfg["save_dir"] = sub_save_dir
+        cfg["save_dir"] = str(sub_save_dir)
         # write config
         sub_cfg_path = pjoin(sub_save_dir, cfg_f.stem+"_sub_"+str(i)+".yaml")
         with sub_cfg_path.open("w", encoding="utf-8") as f:
