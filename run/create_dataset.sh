@@ -82,4 +82,6 @@ echo "- preprocessing job array : $pp_job_array_id"
 echo "- aggregation job array   : $agg_job_id"
 
 # *(6)* kill jobs
+echo "[debug] Cancelling jobs ..."
 scancel $pp_job_array_id $agg_job_id
+echo "Done."
