@@ -504,7 +504,7 @@ def configure(cfg_f, num_projects_per_job):
         cfg = yaml.safe_load(f)
     # create save_dir
     save_dir = pjoin(cfg["save_dir"], datetime.now().strftime('%Y-%m-%d_%H-%M-%S'))
-    save_dir.mkdir(parents=True)save_dir.mkdir(parents=True)
+    save_dir.mkdir(parents=True)
     cfg["save_dir"] = str(save_dir)
     # write config to save_dir
     with pjoin(save_dir, "data_config.yaml").open("w", encoding="utf-8") as f:
