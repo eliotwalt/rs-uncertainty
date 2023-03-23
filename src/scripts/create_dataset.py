@@ -507,7 +507,7 @@ def configure(cfg_f, num_projects_per_job):
     save_dir.mkdir(parents=True)
     cfg["save_dir"] = str(save_dir)
     # write config to save_dir
-    with save_dir.open("w", encoding="utf-8") as f:
+    with pjoin(save_dir, "data_config.yaml").open("w", encoding="utf-8") as f:
         yaml.dump(cfg, f, sort_keys=False) 
     # confugre jobs
     projects = cfg["projects"]

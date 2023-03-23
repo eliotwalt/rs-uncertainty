@@ -24,11 +24,11 @@ eval set -- "$OPTS"
 while :
 do
   case "$1" in
-    -c | --cfg )
+    --cfg )
       CFG="$2"
       shift 2
       ;;
-    -n | --num_projects_per_job )
+    --num_projects_per_job )
       NUM_PROJECTS_PER_JOB="$2"
       shift 2
       ;;
