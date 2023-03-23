@@ -73,7 +73,7 @@ echo "Done."
 # *(4)* Delete sub config files
 echo "Deleting sub config files ..."
 glob=$(dirname $CFG)/*-*-*-*-*/
-echo "rm -r $glob"
+rm -r $glob
 echo "Done."
 
 # *(5)* Feedback
