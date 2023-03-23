@@ -59,10 +59,10 @@ tmp=$(dirname ${sub_cfgs[0]})/`echo $tmp | sed 's/[0-9]/*/g'`
 echo "Saved sub config files: $tmp"
 
 # *(2)* Submit preprocessing jobs
-echo "pp_job_array_id=$(sbatch ./slurm/preprocess_projects_arr.sh ${sub_cfgs[@]})"
+echo 'pp_job_array_id=$(sbatch /cluster/work/igp_psr/elwalt/pdm/rs-uncertainty/run/slurm/preprocess_projects_arr.sh ${sub_cfgs[@]})'
 
 # *(3)* Submit aggregation job
-echo "agg_job_id=$(sbatch ./slurm/aggregate_projects.sh $CFG $pp_job_array_id)"
+echo 'agg_job_id=$(sbatch /cluster/work/igp_psr/elwalt/pdm/rs-uncertainty/run/slurm/aggregate_projects.sh $CFG $pp_job_array_id)'
 
 # *(4)* Feedback
 echo "Successfully submitted preprocessing job array ($pp_job_array_id) and aggregation job ($agg_job_id)"
