@@ -18,10 +18,12 @@ if [[ ${#ARGS[@]} == 0 ]]; then
   exit 1
 fi
 MACHINE=$1
-if [[ "$MACHINE" != "--euler" ]]  || [[ "$MACHINE" != "--local" ]]; then
-    echo "invalid machine"; exit 1
+if [[ "$MACHINE" == "--euler" ]]  || [[ "$MACHINE" == "--local" ]]; then
+  echo "Running on: $MACHINE"
+else
+  echo "invalid machine"; exit 1
 fi
-echo "Running on: $MACHINE"
+
 SHORT=,c:,s:,h
 LONG=cfg:,num_projects_per_job:,help
 OPTS=$(getopt -a -n dataset_creation --options $SHORT --longoption $LONG -- "${@:2}")
