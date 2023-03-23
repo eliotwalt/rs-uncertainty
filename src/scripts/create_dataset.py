@@ -602,7 +602,6 @@ if __name__ == "__main__":
     p.add_argument("--preprocess", help="set to compute mode", action="store_true")
     # aggregation args
     p.add_argument("--aggregate", help="set to aggregate mode", action="store_true")
-
     args = p.parse_args()
     if args.configure:
         assert args.num_projects_per_job, "--num_projects_per_job must be set in configuration mode"

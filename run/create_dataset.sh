@@ -18,7 +18,7 @@ if [[ ${#ARGS[@]} == 0 ]]; then
   exit 1
 fi
 MACHINE=$1
-if [[ $MACHINE != "--euler" || $MACHINE != "--local" ]]; 
+if [ $MACHINE != "--euler" ] | [ $MACHINE != "--local" ]; then
     echo "invalid machine"; exit 1
 fi
 echo "Running on: $MACHINE"
@@ -58,43 +58,48 @@ echo "Num projects per job : $NUM_PROJECTS_PER_JOB"
 
 # **************************************************** LOGIC ****************************************************
 # *(1)* Configure 
-read -r -a sub_cfgs <<< `python /cluster/work/igp_psr/elwalt/pdm/rs-uncertainty/src/scripts/create_dataset.py --configure ${ARGS[@]}`
-CFG=${sub_cfgs[0]}
-sub_cfgs=${sub_cfgs[@]:1}
+if [[ $MACHINE == "--euler" ]]; then
+  retvalue=($(python /cluster/work/igp_psr/elwalt/pdm/rs-uncertainty/src/scripts/create_dataset.py --configure ${ARGS[@]:1}))
+else 
+  retvalue=($(python /scratch/ewalt/pdm/rs-uncertainty/src/scripts/create_dataset.py --configure ${ARGS[@]:1}))
+fi
+CFG=${retvalue[0]}
+sub_cfgs=(${retvalue[@]:1})
 echo "Saved sub config files: $(dirname $CFG)"
 
 # *(2)* Submit preprocessing jobs
-if [[ $MACHINE == "euler" ]];
+if [[ $MACHINE == "--euler" ]];
 then
   echo "Submitting preprocessing job array ..."
   retvalue=($(sbatch /cluster/work/igp_psr/elwalt/pdm/rs-uncertainty/run/slurm/preprocess_projects.sh ${sub_cfgs[@]}))
   pp_job_array_id=${retvalue[-1]}
   echo "Done."
-else #local
+else
   pp_pids=()
   echo "Launching preprocessing processes ..."
-  for i in "${#CONFIG_FILES[@]}";
+  for (( i=0; i<${#sub_cfgs[@]}; i++ ));
   do
-    python /scratch/ewalt/pdm/rs-uncertainty/src/scripts/create_dataset.py --preprocess --cfg $CONFIG_FILES[$i] 1> dataset.$i.log 2> dataset.$i.log
-    pids+=($!)
+    echo "Launching ${sub_cfgs[$i]}"
+    python /scratch/ewalt/pdm/rs-uncertainty/src/scripts/create_dataset.py --preprocess --cfg ${sub_cfgs[$i]} 1> dataset.$i.log 2> dataset.$i.log &
+    pids[$i]=$!
   done
-  echo "Done. Check logs: dataset.*.log"
-  for pid in "${pids[@]}"
+  echo "Done. Check logs: dataset.[0-$(($i-1))].log"
+  echo "waiting on ${pids[@]} ..."
+  for pid in "${pids[@]}";
   do
     wait $pid
   done
-  echo "waiting on ${pids[@]} ..."
   echo "Done."
 fi
 
 # *(3)* Submit aggregation job
-if [[ $MACHINE == "euler" ]];
+if [[ $MACHINE == "--euler" ]];
 then
   echo "Submitting aggregation job ..."
   retvalue=($(sbatch /cluster/work/igp_psr/elwalt/pdm/rs-uncertainty/run/slurm/aggregate_projects.sh $CFG $pp_job_array_id))
   agg_job_id=${retvalue[-1]}
   echo "Done."
-else #local
+else
   echo "Launching aggregation process ..."
   python /scratch/ewalt/pdm/rs-uncertainty/src/scripts/create_dataset.py --aggregate --cfg $CFG
   pid=$!
@@ -102,6 +107,7 @@ else #local
   echo "Done."
   echo "Waiting on $pid ..."
   echo "Done."
+fi
 
 # *(5)* Feedback
 if [[ $MACHINE == "euler" ]];

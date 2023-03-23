@@ -17,7 +17,7 @@ GDALVESION=3.4.3
 # **************************************************** SLURM *****************************************************
 # #SBATCH -n 1
 # #SBATCH --time=$TIME
-# #SBATCH --mem-per-cpu=8000
+# #SBATCH --mem-per-cpu=6000
 # #SBATCH --array=1-$NUM_JOBS
 # #SBATCH --job-name=$JOB_NAME
 # #SBATCH --output=$LOG_FILE
