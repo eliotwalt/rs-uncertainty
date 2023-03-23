@@ -77,7 +77,7 @@ TTT
 }
 
 # make_aggregation_job_script() {
-    # fill template
+    # fill templatesub_cfgs
 #         readarray -t -d '\n\t' template << TTT
 #         #SBATCH -n 1
 #         #SBATCH --time=15:00
@@ -92,7 +92,8 @@ TTT
 #             --aggregate \
 #             --cfg cfg
 
-        # rm -r $out $cfg
+    # leave no trace
+        # rm ${confs[@]} ${outs[@]}
 # TTT
 # }
 
@@ -132,4 +133,3 @@ echo "Slurm job ids: ${job_ids[@]}"
 
 # *(3)* Generate aggregation script
 # make_aggregation_job_script ${job_ids[@]} ${sub_cfgs[@]}
-rm ${sub_cfgs} ${outs} 
