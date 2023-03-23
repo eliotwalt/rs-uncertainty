@@ -1,6 +1,5 @@
 blowtorch>=0.5.3
 Fiona>=1.9.1
-GDAL==3.4.3
 matplotlib>=3.5.3
 networkx>=2.6.3
 numpy>=1.21.6
