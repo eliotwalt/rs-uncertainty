@@ -1,4 +1,4 @@
-import os, sys
+import os, sys, shutil
 import argparse
 from copy import deepcopy
 from typing import *
@@ -19,6 +19,7 @@ import rasterio.features
 import matplotlib
 import matplotlib.pyplot as plt
 from time import time
+from uuid import uuid5
 
 def _path(x):
     try:
@@ -62,13 +63,12 @@ class ProjectsPreprocessor:
         self._validate_run_config()
         # set all random seeds
         self.run.seed_all(self.seed)
-        self.projects_stats["seed"] = self.seed
         # save directory
         self.save_dir = self.run["save_dir"]
         # create dataset
         self.prange = trange
 
-    def __apply__(self):
+    def __call__(self):
         # collect arguments
         args_dicts = []
         projects = self.run["projects"].copy()
@@ -506,17 +506,27 @@ def configure(cfg_f, num_projects_per_job):
     save_dir = pjoin(cfg["save_dir"], datetime.now().strftime('%Y-%m-%d_%H-%M-%S'))
     save_dir.mkdir(parents=True)
     cfg["save_dir"] = str(save_dir)
+    # write config to save_dir
+    with save_dir.open("w", encoding="utf-8") as f:
+        yaml.dump(cfg, f, sort_keys=False) 
     # confugre jobs
     projects = cfg["projects"]
     sub_cfg_paths = []
+    sub_save_dirs = [0]
     for i in range(0, len(projects), num_projects_per_job):
+        # select projects
         sub_projects = projects[i:i+num_projects_per_job]
         cfg["projects"] = sub_projects
-        sub_cfg_path = pjoin(save_dir, cfg_f.stem+"_sub_"+str(i)+".yaml")
+        # define subdirectory
+        sub_save_dir = pjoin(save_dir, str(uuid5()))
+        while sub_save_dir in sub_save_dirs: sub_save_dir = pjoin(save_dir, str(uuid5()))
+        cfg["save_dir"] = sub_save_dir
+        # write config
+        sub_cfg_path = pjoin(sub_save_dir, cfg_f.stem+"_sub_"+str(i)+".yaml")
         with sub_cfg_path.open("w", encoding="utf-8") as f:
             yaml.dump(cfg, f, sort_keys=False)
         sub_cfg_paths.append(sub_cfg_path)
-    print(" ".join([str(p) for p in sub_cfg_paths]))
+    print(" ".join([str(p) for p in [save_dir]+sub_cfg_paths]))
 
 def preprocess(cfg_f):
     """
@@ -529,13 +539,34 @@ def preprocess(cfg_f):
 def aggregate(cfg_f):
     """
     Given a path to a directory of processed projects, aggreagate the statistics
+
+    According to configuration function, each sub set of projects is written to distinct folder $sub_dir
+    within the main folder $main_dir:
+        ${main_dir}
+            \_ ${sub_dir}
+                \_ ${project_id}.pkl
+                \_ num_images_per_pixel_${project_id}.tif
+                \_ stats.yaml
+                \_ data_config.yaml
+
+    Aggregation steps
+    1. mv ${main_dir}/${sub_dir}/*.pkl ${main_dir}/*.pkl
+    2. mv ${main_dir}/${sub_dir}/num_images_per_pixel_*.tif ${main_dir}/num_images_per_pixel_*.tif
+    3. Combine ${main_dir}/*/stats.yaml into ${main_dir}/stats.yaml
+        - 
     """
     # load main configuration
     with cfg_f.open("r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
     # load save_dir
-    save_dir = cfg["save_dir"]
-    # 
+    save_dir = Path(cfg["save_dir"])
+    # iterate over sub_directories
+    for subdir in save_dir.iterdir():
+        if os.path.isdir(subdir):
+            # 1. copy pkl files
+            for pkl_file in subdir.glob("*.pkl"):
+                dst = pjoin(save_dir, )
+                shutil.copyfile(pkl_file)
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
@@ -545,7 +576,7 @@ if __name__ == "__main__":
     p.add_argument("--configure", help="set to configure mode", action="store_true")
     p.add_argument("--num_projects_per_job", help="number of jobs", type=int)
     # run args
-    p.add_argument("--preprocessing", help="set to compute mode", action="store_true")
+    p.add_argument("--preprocess", help="set to compute mode", action="store_true")
     # aggregation args
     p.add_argument("--aggregate", help="set to aggregate mode", action="store_true")
 
@@ -553,7 +584,9 @@ if __name__ == "__main__":
     if args.configure:
         assert args.num_projects_per_job, "--num_projects_per_job must be set in configuration mode"
         configure(args.cfg, args.num_projects_per_job)
+    elif args.preprocess:
+        preprocess(args.cfg)
     elif args.aggregate:
-        aggregate(args.save_dir)
+        aggregate(args.cfg)
     else: raise AttributeError("Must be set either to configuration (--configure) or aggregatation (--aggregate) mode.")
     sys.exit(0)
