@@ -14,7 +14,7 @@ HELPSTRING
 # source: https://stackabuse.com/how-to-parse-command-line-arguments-in-bash/
 ARGS=("$@")
 SHORT=,c:,s:,h
-LONG=cfg:,array_size:,help
+LONG=cfg:,num_projects_per_job:,help
 OPTS=$(getopt -a -n dataset_creation --options $SHORT --longoption $LONG -- "$@")
 eval set -- "$OPTS"
 while :
