@@ -52,7 +52,7 @@ echo "Job array size: $ARRAY_SIZE"
 
 # **************************************************** LOGIC ****************************************************
 # *(1)* Configure 
-read -r -a sub_cfgs <<< `python /cluster/work/igp_psr/elwalt/pdm/rs-uncertainty/src/scripts/create_dataset.py 
+read -r -a sub_cfgs <<< `python /cluster/work/igp_psr/elwalt/pdm/rs-uncertainty/src/scripts/create_dataset.py \
     --configure --cfg $CFG ----num_projects_per_job $NUM_PROJECTS_PER_JOB`
 tmp=$(basename ${sub_cfgs[0]})
 tmp=$(dirname ${sub_cfgs[0]})/`echo $tmp | sed 's/[0-9]/*/g'`
