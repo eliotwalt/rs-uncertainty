@@ -56,7 +56,7 @@ echo "Num projects per job : $NUM_PROJECTS_PER_JOB"
 read -r -a sub_cfgs <<< `python /cluster/work/igp_psr/elwalt/pdm/rs-uncertainty/src/scripts/create_dataset.py --configure ${ARGS[@]}`
 CFG=${sub_cfgs[0]}
 sub_cfgs=${sub_cfgs[@]:1}
-echo "Saved sub config files: $CFG"
+echo "Saved sub config files: $(basename $CFG)"
 
 # *(2)* Submit preprocessing jobs
 echo "Submitting preprocessing job array ..."
@@ -70,9 +70,9 @@ echo "Done."
 
 # *(4)* Delete sub config files
 echo "Deleting sub config files ..."
-echo 'agg_job_id=$(sbatch /cluster/work/igp_psr/elwalt/pdm/rs-uncertainty/run/slurm/aggregate_projects.sh $CFG $pp_job_array_id)'
+glob=$(basename $CFG)/*-*-*-*-*/
+echo "rm -r $glob"
 echo "Done."
-
 
 # *(5)* Feedback
 echo "Job ids:"

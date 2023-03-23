@@ -523,11 +523,11 @@ def configure(cfg_f, num_projects_per_job):
         sub_save_dir.mkdir(parents=False)
         cfg["save_dir"] = str(sub_save_dir)
         # write config
-        sub_cfg_path = pjoin(sub_save_dir, cfg_f.stem+"_sub_"+str(i)+".yaml")
+        sub_cfg_path = pjoin(sub_save_dir, cfg_f.name)
         with sub_cfg_path.open("w", encoding="utf-8") as f:
             yaml.dump(cfg, f, sort_keys=False)
         sub_cfg_paths.append(sub_cfg_path)
-    print(" ".join([str(p) for p in [save_dir]+sub_cfg_paths]))
+    print(" ".join([str(p) for p in [pjoin(save_dir, "data_config.yaml")]+sub_cfg_paths]))
 
 def preprocess(cfg_f):
     """
