@@ -43,8 +43,8 @@ do
       ;;
   esac
 done
-echo "Main config file: $CFG"
-echo "Job array size: $ARRAY_SIZE"
+echo "Main config file     : $CFG"
+echo "Num projects per job : $NUM_PROJECTS_PER_JOB"
 
 # **************************************************** LOGIC ****************************************************
 # *(1)* Configure 
