@@ -555,6 +555,7 @@ def aggregate(cfg_f):
     2. mv ${main_dir}/${sub_dir}/num_images_per_pixel_*.tif ${main_dir}/num_images_per_pixel_*.tif
     3. Combine ${main_dir}/*/stats.yaml into ${main_dir}/stats.yaml
         - 
+    4. delete ${main_dir}/${sub_dir}
     """
     # load main configuration
     with cfg_f.open("r", encoding="utf-8") as f:
@@ -562,12 +563,33 @@ def aggregate(cfg_f):
     # load save_dir
     save_dir = Path(cfg["save_dir"])
     # iterate over sub_directories
+    stats = {"num_train": 0, "num_val": 0, "num_test": 0}
+    accum_keys = list(stats.keys()).copy()
     for subdir in save_dir.iterdir():
         if os.path.isdir(subdir):
             # 1. copy pkl files
             for pkl_file in subdir.glob("*.pkl"):
-                dst = pjoin(save_dir, )
-                shutil.copyfile(pkl_file)
+                dst = pjoin(save_dir, pkl_file.name)
+                shutil.copyfile(pkl_file, dst)
+            # 2. copy tif files
+            for tif_file in subdir.glob("*.tif"):
+                dst = pjoin(save_dir, tif_file.name)
+                shutil.copyfile(tif_file, dst)
+            # 3. combine stats
+            with pjoin(subdir, "stats.yaml").open("r") as f:
+                sub_stats = yaml.safe_load()
+            projects = list(sub_stats.keys()).copy()
+            for p in projects:
+                ## 3.1. copy project data
+                stats[p] = sub_stats[p]
+                ## 3.2. update accumulators
+                for key in accum_keys:
+                    stats[key] += sub_stats[p][key]
+            # 4. delete
+            shutil.rmtree(subdir)
+    # write updated stats
+    with pjoin(save_dir, "stats.yaml").open("w", encoding="utf-8") as f:
+        yaml.dump(stats, f, sort_keys=False)
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()

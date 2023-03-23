@@ -26,4 +26,4 @@ GDALVESION=3.4.3
 # pip install gdal=`gdal-config --version` --user # do not put it in requirements, the version must match local install!
 # pip install -r requirements.txt --user
 
-# python /scratch/ewalt/pdm/rs-uncertainty/src/scripts/create_dataset.py --aggregate --cfg $CONFIG_FILE
+# python /cluster/work/igp_psr/elwalt/pdm/rs-uncertainty/src/scripts/create_dataset.py --aggregate --cfg $CONFIG_FILE
