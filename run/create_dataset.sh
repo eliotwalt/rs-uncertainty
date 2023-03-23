@@ -18,8 +18,7 @@ if [[ ${#ARGS[@]} == 0 ]]; then
   exit 1
 fi
 MACHINE=$1
-echo $MACHINE
-if [[ $MACHINE != "--euler"  ||  $MACHINE != "--local" ]]; then
+if [[ "$MACHINE" != "--euler" ]]  || [[ "$MACHINE" != "--local" ]]; then
     echo "invalid machine"; exit 1
 fi
 echo "Running on: $MACHINE"
