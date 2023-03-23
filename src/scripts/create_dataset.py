@@ -19,7 +19,7 @@ import rasterio.features
 import matplotlib
 import matplotlib.pyplot as plt
 from time import time
-from uuid import uuid5
+from uuid import uuid4
 
 def _path(x):
     try:
@@ -518,8 +518,8 @@ def configure(cfg_f, num_projects_per_job):
         sub_projects = projects[i:i+num_projects_per_job]
         cfg["projects"] = sub_projects
         # define subdirectory
-        sub_save_dir = pjoin(save_dir, str(uuid5()))
-        while sub_save_dir in sub_save_dirs: sub_save_dir = pjoin(save_dir, str(uuid5()))
+        sub_save_dir = pjoin(save_dir, str(uuid4()))
+        while sub_save_dir in sub_save_dirs: sub_save_dir = pjoin(save_dir, str(uuid4()))
         cfg["save_dir"] = sub_save_dir
         # write config
         sub_cfg_path = pjoin(sub_save_dir, cfg_f.stem+"_sub_"+str(i)+".yaml")
