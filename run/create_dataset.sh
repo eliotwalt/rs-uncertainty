@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ************************************************** HELPSTRING **************************************************
-read -r -d '' HELP << HELPSTRING
+read -r -d '' HELP <<HELPSTRING
 Create dataset on Euler
 This script generates and submits batch jobs on Euler to generate a dataset. Creation is done as a job array while
 statistic aggregation is performed once all scripts have finished.
@@ -13,6 +13,10 @@ HELPSTRING
 # ************************************************** ARGUMENTS ***************************************************
 # source: https://stackabuse.com/how-to-parse-command-line-arguments-in-bash/
 ARGS=("$@")
+if [[ ${#ARGS[@]} == 0 ]]; then
+  echo "Ivalid options. Use -h or --help for help."
+  exit 1
+fi
 SHORT=,c:,s:,h
 LONG=cfg:,num_projects_per_job:,help
 OPTS=$(getopt -a -n dataset_creation --options $SHORT --longoption $LONG -- "$@")
@@ -31,7 +35,7 @@ do
     -h | --help )
       printf "%s\n" "$HELP"
       shift;
-      exit 1
+      exit 0
       ;;
     --)
       shift;
@@ -39,6 +43,7 @@ do
       ;;
     *)
       echo "Unexpected option: $1"
+      echo "Use -h or --help for more information"
       exit 1
       ;;
   esac
@@ -55,7 +60,7 @@ echo "Saved sub config files: $tmp"
 
 # *(2)* Submit preprocessing jobs
 echo "Submitting preprocessing job array ..."
-echo 'pp_job_array_id=$(sbatch /cluster/work/igp_psr/elwalt/pdm/rs-uncertainty/run/slurm/preprocess_projects_arr.sh ${sub_cfgs[@]})'
+echo 'pp_job_array_id=$(sbatch /cluster/work/igp_psr/elwalt/pdm/rs-uncertainty/run/slurm/preprocess_projects.sh ${sub_cfgs[@]})'
 echo "Done."
 
 # *(3)* Submit aggregation job

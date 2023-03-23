@@ -28,4 +28,4 @@ GDALVESION=3.4.3
 # pip install gdal=`gdal-config --version` --user # do not put it in requirements, the version must match local install!
 # pip install -r requirements.txt --user
 
-# python /scratch/ewalt/pdm/rs-uncertainty/src/scripts/create_dataset.py --preprocess --cfg $CONFIG_FILES[$SLURM_ARRAY_TASK_ID]
+# python /scratch/ewalt/pdm/rs-uncertainty/src/scripts/create_dataset.py --preprocessing --cfg $CONFIG_FILES[$SLURM_ARRAY_TASK_ID]
