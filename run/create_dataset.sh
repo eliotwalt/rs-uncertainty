@@ -38,10 +38,10 @@ do
       ;;
     *)
       echo "Unexpected option: $1"
+      exit 1
       ;;
   esac
 done
-echo "Scheduling: $JOB_NAME"
 echo "Main config file: $CFG"
 echo "Job array size: $ARRAY_SIZE"
 

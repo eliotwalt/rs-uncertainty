@@ -12,7 +12,7 @@ def path(x):
 
 def pjoin(*subs): return Path(os.path.abspath(os.path.join(*subs)))
 
-def configure(cfg_f, num_project_per_job):
+def configure(cfg_f, num_projects_per_job):
     """
     Given a blowtorch configuration and a number of jobs, configure each jobs (i.e generate job configurations
     and return them). Each job gets a list of projects to process.
@@ -27,8 +27,8 @@ def configure(cfg_f, num_project_per_job):
     # confugre jobs
     projects = cfg["projects"]
     sub_cfg_paths = []
-    for i in range(0, len(projects), num_project_per_job):
-        sub_projects = projects[i:i+num_project_per_job]
+    for i in range(0, len(projects), num_projects_per_job):
+        sub_projects = projects[i:i+num_projects_per_job]
         cfg["projects"] = sub_projects
         sub_cfg_path = pjoin(save_dir, cfg_f.stem+"_sub_"+str(i)+".yaml")
         with sub_cfg_path.open("w", encoding="utf-8") as f:
@@ -47,13 +47,13 @@ if __name__ == "__main__":
     # configuration args
     p.add_argument("--configure", help="set to configure mode", action="store_true")
     p.add_argument("--cfg", help="path to config file (yaml)", type=path)
-    p.add_argument("--num_project_per_job", help="number of jobs", type=int)
+    p.add_argument("--num_projects_per_job", help="number of jobs", type=int)
     # aggregation args
     p.add_argument("--aggregate", help="set to aggregate mode", action="store_true")
     args = p.parse_args()
     if args.configure:
-        assert args.num_project_per_job, "--num_project_per_job must be set in configuration mode"
-        configure(args.cfg, args.num_project_per_job)
+        assert args.num_projects_per_job, "--num_projects_per_job must be set in configuration mode"
+        configure(args.cfg, args.num_projects_per_job)
     elif args.aggregate:
         aggregate(args.save_dir)
     else: raise AttributeError("Must be set either to configuration (--configure) or aggregatation (--aggregate) mode.")
