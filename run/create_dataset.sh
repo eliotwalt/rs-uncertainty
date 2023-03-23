@@ -112,7 +112,7 @@ else
 fi
 
 # *(5)* Feedback
-if [[ $MACHINE == "euler" ]];
+if [[ $MACHINE == "--euler" ]];
 then
   echo "Job ids:"
   echo "- preprocessing job array : $pp_job_array_id"
@@ -120,9 +120,9 @@ then
 fi
 
 # *(6)* kill jobs
-if [[ $MACHINE == "euler" ]];
-then
-  echo "[debug] Cancelling jobs ..."
-  scancel $pp_job_array_id $agg_job_id
-  echo "Done."
-fi
+# if [[ $MACHINE == "--euler" ]];
+# then
+#   echo "[debug] Cancelling jobs ..."
+#   scancel $pp_job_array_id $agg_job_id
+#   echo "Done."
+# fi
