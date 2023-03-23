@@ -60,13 +60,13 @@ echo "Saved sub config files: $(dirname $CFG)"
 
 # *(2)* Submit preprocessing jobs
 echo "Submitting preprocessing job array ..."
-'retvalue=($(sbatch /cluster/work/igp_psr/elwalt/pdm/rs-uncertainty/run/slurm/preprocess_projects.sh' ${sub_cfgs[@]}))
+retvalue=($(sbatch /cluster/work/igp_psr/elwalt/pdm/rs-uncertainty/run/slurm/preprocess_projects.sh ${sub_cfgs[@]}))
 pp_job_array_id=${retvalue[-1]}
 echo "Done."
 
 # *(3)* Submit aggregation job
 echo "Submitting aggregation job ..."
-'retvalue=($(sbatch /cluster/work/igp_psr/elwalt/pdm/rs-uncertainty/run/slurm/aggregate_projects.sh' $CFG $pp_job_array_id))
+retvalue=($(sbatch /cluster/work/igp_psr/elwalt/pdm/rs-uncertainty/run/slurm/aggregate_projects.sh $CFG $pp_job_array_id))
 agg_job_id=${retvalue[-1]}
 echo "Done."
 
