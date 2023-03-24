@@ -8,7 +8,7 @@ results/
 results_dev/
 *.euler.sh
 fake_submit.sh
-
+*.out
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
