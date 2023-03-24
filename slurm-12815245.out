@@ -1,0 +1,7 @@
+dirname: missing operand
+Try 'dirname --help' for more information.
+basename: missing operand
+Try 'basename --help' for more information.
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+ZeroDivisionError: integer division or modulo by zero
