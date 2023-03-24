@@ -92,7 +92,7 @@ then
   echo "number of jobs : $num_jobs"
   echo "Log file       : $log_file"
   echo "Compute time   : $time"
-  options="-n 1 --mem-per-cpu=12000 --job-name=$job_name --array=1-$num_jobs --output=$log_file --error=$log_file"
+  options="-n 1 --mem-per-cpu=16000 --job-name=$job_name --array=1-$num_jobs --output=$log_file --error=$log_file"
   echo "Options        : $options"
   # create log dir/file
   mkdir -p $log_dir
