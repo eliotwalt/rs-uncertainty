@@ -159,10 +159,7 @@ then
   echo "Job ids:"
   echo "- aggregation job array   : $agg_job_id"
   echo "- preprocessing job array : $pp_job_array_id"
-  for job_id in "${job_ids[@]}";
-  do
-      echo "  - Array element job id: $job_id"
-  done
+  echo "Get array job job ids: scontrol show jobid -dd $pp_job_array_id | grep --color 'JobId=' | cut -d ' ' -f 1 | cut -d '=' -f 2"
   echo "Monitor status with: sacct -n -X -j $pp_job_array_id"
 fi
 

@@ -521,8 +521,7 @@ def configure(cfg_f, num_projects_per_job):
         if len(sub_projects)==0: break
         cfg["projects"] = sub_projects
         # define subdirectory
-        sub_save_dir = pjoin(save_dir, str(uuid4()))
-        while sub_save_dir in sub_save_dirs: sub_save_dir = pjoin(save_dir, str(uuid4()))
+        sub_save_dir = pjoin(save_dir, "-".join(sub_projects))
         sub_save_dir.mkdir(parents=False)
         cfg["save_dir"] = str(sub_save_dir)
         # write config
@@ -568,17 +567,22 @@ def aggregate(cfg_f):
     # iterate over sub_directories
     stats = {"num_train": 0, "num_val": 0, "num_test": 0}
     accum_keys = list(stats.keys()).copy()
+    print("Starting projects aggregation.")
     for subdir in save_dir.iterdir():
         if os.path.isdir(subdir):
+            print(f"Aggregating: {subdir.name}")
             # 1. copy pkl files
+            print("Copying pkl files ...")
             for pkl_file in subdir.glob("*.pkl"):
                 dst = pjoin(save_dir, pkl_file.name)
                 shutil.copyfile(pkl_file, dst)
             # 2. copy tif files
+            print("Copying tif files ...")
             for tif_file in subdir.glob("*.tif"):
                 dst = pjoin(save_dir, tif_file.name)
                 shutil.copyfile(tif_file, dst)
             # 3. combine stats
+            print("Combining stats")
             with pjoin(subdir, "stats.yaml").open("r") as f:
                 sub_stats = yaml.safe_load(f)
             projects = list(sub_stats.keys()).copy()
@@ -590,9 +594,12 @@ def aggregate(cfg_f):
                     stats[key] += sub_stats[p][key]
             # 4. delete
             shutil.rmtree(subdir)
+            print("Done.")
     # write updated stats
+    print("Writing aggregated stats ...")
     with pjoin(save_dir, "stats.yaml").open("w", encoding="utf-8") as f:
         yaml.dump(stats, f, sort_keys=False)
+    print("Done.")
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
