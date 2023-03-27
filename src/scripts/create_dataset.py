@@ -465,6 +465,7 @@ class ProjectsPreprocessor:
             labels,
         ):
         path = pjoin(self.save_dir, f"{project_id}.pkl")
+        print(f"Pickling project {project_id}: {str(path)}")
         with path.open("wb") as fh:
             pickle.dump({
                 'images': images,
@@ -485,6 +486,7 @@ class ProjectsPreprocessor:
                 ),
                 'labels': labels
             }, fh)
+        print(f"Done pickling project {project_id}")
         return path
 
     # def plot(self, project_id, ax=None):
@@ -516,6 +518,7 @@ def configure(cfg_f, num_projects_per_job):
     for i in range(0, len(projects), num_projects_per_job):
         # select projects
         sub_projects = projects[i:i+num_projects_per_job]
+        if len(sub_projects)==0: break
         cfg["projects"] = sub_projects
         # define subdirectory
         sub_save_dir = pjoin(save_dir, str(uuid4()))
@@ -577,7 +580,7 @@ def aggregate(cfg_f):
                 shutil.copyfile(tif_file, dst)
             # 3. combine stats
             with pjoin(subdir, "stats.yaml").open("r") as f:
-                sub_stats = yaml.safe_load()
+                sub_stats = yaml.safe_load(f)
             projects = list(sub_stats.keys()).copy()
             for p in projects:
                 ## 3.1. copy project data

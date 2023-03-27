@@ -14,4 +14,5 @@ pip install gdal==`gdal-config --version` --user # do not put it in requirements
 pip install -r requirements.txt --user
 
 # **************************************************** COMMAND ***************************************************
-python /cluster/work/igp_psr/elwalt/pdm/rs-uncertainty/src/scripts/create_dataset.py --preprocess --cfg ${CONFIG_FILES[${SLURM_ARRAY_TASK_ID}]}
+i=$((${SLURM_ARRAY_TASK_ID}-1))
+python /cluster/work/igp_psr/elwalt/pdm/rs-uncertainty/src/scripts/create_dataset.py --preprocess --cfg ${CONFIG_FILES[$i]}

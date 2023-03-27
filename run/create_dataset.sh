@@ -85,14 +85,14 @@ then
   num_jobs=${#sub_cfgs[@]}
   timestamp=$(basename $(dirname $(dirname ${sub_cfgs[0]})))
   time=$(python -c "from datetime import timedelta; dt=timedelta(hours=12); print(dt/$num_jobs)")
-  log_dir=/cluster/work/igp_psr/elwalt/logs/preprocess_projects/$timestamp
+  log_dir=/cluster/work/igp_psr/elwalt/logs/dataset/$timestamp
   job_name="preprocess_projects"
-  log_file=$log_dir/%a-$num_jobs.log
+  log_file=$log_dir/pp_%a-$num_jobs.log
   echo "Array job name : $job_name"
   echo "number of jobs : $num_jobs"
   echo "Log file       : $log_file"
   echo "Compute time   : $time"
-  options="-n 1 --mem-per-cpu=16000 --job-name=$job_name --array=1-$num_jobs --output=$log_file --error=$log_file"
+  options="-n 1 --mem-per-cpu=64000 --job-name=$job_name --array=1-$num_jobs --output=$log_file --error=$log_file"
   echo "Options        : $options"
   # create log dir/file
   mkdir -p $log_dir
@@ -128,9 +128,9 @@ then
   # compute slurm options as they are not static and can't be defined with #SBATCH in script
   echo "Computing job options ...."
   timestamp=$(python -c "import yaml; f=open('$CFG', 'r'); data=yaml.safe_load(f); f.close(); print(data['save_dir'].split('/')[-1])")
-  log_dir=/cluster/work/igp_psr/elwalt/logs/aggregate_projects
+  log_dir=/cluster/work/igp_psr/elwalt/logs/dataset/$timestamp
   job_name=aggregate_projects
-  log_file=$log_dir/$timestamp/std.log
+  log_file=$log_dir/agg.log
   echo "Job name       : $job_name"
   echo "Log file       : $log_file"
   options="-n 1 --mem-per-cpu=3000 --time=10:00 --depend=afterok:$pp_job_array_id --job-name=$job_name --output=$log_file --error=$log_file"
@@ -155,9 +155,15 @@ fi
 # *(5)* Feedback
 if [[ $MACHINE == "--euler" ]];
 then
+  job_ids=(`scontrol show jobid -dd $pp_job_array_id | grep --color "JobId=" | cut -d " " -f 1 | cut -d "=" -f 2`)
   echo "Job ids:"
-  echo "- preprocessing job array : $pp_job_array_id"
   echo "- aggregation job array   : $agg_job_id"
+  echo "- preprocessing job array : $pp_job_array_id"
+  for job_id in "${job_ids[@]}";
+  do
+      echo "  - Array element job id: $job_id"
+  done
+  echo "Monitor status with: sacct -n -X -j $pp_job_array_id"
 fi
 
 # # *(6)* kill jobs
