@@ -25,7 +25,7 @@ def parse_date(date_str) -> datetime:
     return datetime.strptime(date_str, '%Y%m%d')
 
 
-run = Run(config_files=['config/predict_testset.yaml'])
+run = Run(config_files=['config/predict_testset-dev.yaml'])
 run.seed_all(12345)
 
 save_dir = Path('results/dev/') / (datetime.now().strftime('%Y-%m-%d_%H-%M-%S') + (f'_{run["name"]}' if run['name'] else ''))
