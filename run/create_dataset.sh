@@ -133,7 +133,7 @@ then
   log_file=$log_dir/agg.log
   echo "Job name       : $job_name"
   echo "Log file       : $log_file"
-  options="-n 1 --mem-per-cpu=3000 --time=10:00 --depend=afterok:$pp_job_array_id --job-name=$job_name --output=$log_file --error=$log_file"
+  options="-n 1 --mem-per-cpu=3000 --time=20:00 --depend=afterok:$pp_job_array_id --job-name=$job_name --output=$log_file --error=$log_file"
   echo "Options        : $options"
   # create log dir/file
   mkdir -p $(dirname $log_file)

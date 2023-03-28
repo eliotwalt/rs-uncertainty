@@ -10,7 +10,7 @@ import pickle
 import yaml, json
 import blowtorch
 from blowtorch import Run
-from tqdm import trange
+from tqdm import trange, tqdm
 import numpy as np
 import fiona
 import os
@@ -19,7 +19,8 @@ import rasterio.features
 import matplotlib
 import matplotlib.pyplot as plt
 from time import time
-from uuid import uuid4
+
+SEPARATOR = 65535
 
 def _path(x):
     try:
@@ -45,7 +46,7 @@ class ProjectsPreprocessor:
         self,
         run: blowtorch.run.Run,
         seed: int=12345,
-        separator: int=65535,
+        separator: int=SEPARATOR,
         split_map = ["train", "val", "test"], # if ["test"] then it will only generate the test set
         verbose: bool=True
     ) -> None:
@@ -541,24 +542,12 @@ def preprocess(cfg_f):
     
 def aggregate(cfg_f):
     """
-    Given a path to a directory of processed projects, aggreagate the statistics
-
-    According to configuration function, each sub set of projects is written to distinct folder $sub_dir
-    within the main folder $main_dir:
-        ${main_dir}
-            \_ ${sub_dir}
-                \_ ${project_id}.pkl
-                \_ num_images_per_pixel_${project_id}.tif
-                \_ stats.yaml
-                \_ data_config.yaml
-
-    Aggregation steps
-    1. mv ${main_dir}/${sub_dir}/*.pkl ${main_dir}/*.pkl
-    2. mv ${main_dir}/${sub_dir}/num_images_per_pixel_*.tif ${main_dir}/num_images_per_pixel_*.tif
-    3. Combine ${main_dir}/*/stats.yaml into ${main_dir}/stats.yaml
-        - 
-    4. delete ${main_dir}/${sub_dir}
+    Given a path to a directory of processed projects, compute aggreagated statistics
     """
+    import sys, os 
+    root = os.path.dirname(os.path.dirname(__file__))
+    sys.path.insert(0, root)
+    from utils import split_list, RunningStats
     # load main configuration
     with cfg_f.open("r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
@@ -573,16 +562,16 @@ def aggregate(cfg_f):
             print(f"Aggregating: {subdir.name}")
             # 1. copy pkl files
             print("Copying pkl files ...")
-            for pkl_file in subdir.glob("*.pkl"):
+            for pkl_file in tqdm(subdir.glob("*.pkl")):
                 dst = pjoin(save_dir, pkl_file.name)
                 shutil.copyfile(pkl_file, dst)
             # 2. copy tif files
             print("Copying tif files ...")
-            for tif_file in subdir.glob("*.tif"):
+            for tif_file in tqdm(subdir.glob("*.tif")):
                 dst = pjoin(save_dir, tif_file.name)
                 shutil.copyfile(tif_file, dst)
             # 3. combine stats
-            print("Combining stats")
+            print("Combining stats ...")
             with pjoin(subdir, "stats.yaml").open("r") as f:
                 sub_stats = yaml.safe_load(f)
             projects = list(sub_stats.keys()).copy()
@@ -595,6 +584,46 @@ def aggregate(cfg_f):
             # 4. delete
             shutil.rmtree(subdir)
             print("Done.")
+    # Compute variables statistics
+    print("Computing variables statistics ...")
+    s2_stats = RunningStats((12,))
+    s1_stats = RunningStats((2,))
+    labels_stats = RunningStats((5,))
+    for pkl_file in save_dir.glob("*.pkl"):
+        print(f"Processing {pkl_file.stem} ...")
+        with pkl_file.open("rb") as fh: data = pickle.load(fh)
+        # select data
+        locations = data['train'][0]
+        loc_to_images_map = data['train'][1]
+        offsets = data['train'][2]
+        images = data['images']
+        labels = data['labels']
+        for index in trange(len(locations)):
+            i, j = locations[index]
+            patch_half = patch_size // 2
+            i_slice = slice(i - patch_half, i + patch_half + 1)
+            j_slice = slice(j - patch_half, j + patch_half + 1)
+            # extract the part from loc_to_images_map that contains the valid s2 and s1 indices for this location
+            upper = None if index == len(locations) - 1 else offsets[index + 1]
+            _map = loc_to_images_map[offsets[index]:upper]
+            assert _map[0] != SEPARATOR and _map[-1] == SEPARATOR, f"{i}, {j}"
+            _map = np.array(split_list(_map.tolist(), SEPARATOR), dtype='object')
+            assert len(_map) % 3 == 0
+            for s2_indices, s1_a_indices, s1_d_indices in np.array_split(_map, len(_map) // 3):
+                assert len(s2_indices) == 1
+                s2_index = s2_indices[0]
+                s2_stats.add(images[s2_index][:12, i_slice, j_slice].reshape(-1, patch_size**2).transpose())
+                for s1_index in chain(s1_a_indices, s1_d_indices):
+                    s1_stats.add(images[s1_index][:, i_slice, j_slice].reshape(-1, patch_size**2).transpose())
+            labels_patch = labels[:, i_slice, j_slice]
+            labels_stats.add(labels_patch[:, ~np.isnan(labels_patch).any(0)].transpose())
+    # update stats
+    stats.update({
+        's2_mean': s2_stats.mean.tolist(), 's2_std': s2_stats.std.tolist(),
+        's1_mean': s1_stats.mean.tolist(), 's1_std': s1_stats.std.tolist(),
+        'labels_mean': labels_stats.mean.tolist(), 'labels_std': labels_stats.std.tolist()
+    })
+    print("Done.")  
     # write updated stats
     print("Writing aggregated stats ...")
     with pjoin(save_dir, "stats.yaml").open("w", encoding="utf-8") as f:

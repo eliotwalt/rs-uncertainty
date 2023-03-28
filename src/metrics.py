@@ -2,17 +2,21 @@ import numpy as np
 from itertools import chain
 import scipy.stats
 import yaml
+from copy import deepcopy
 
-REGRESSION_METRICS = ["mse", "mse_p", "mae", "mae_p", "rmse", "rmse_p", "mbe", "mbe_p", "nll", "nll_p"]
-UQ_METRICS = ["uce", "uce_p", "ence", "ence_p", "auce", "r09", "c_v", "srp", "srp_p", "ause_rmse", "ause_uce"]
+REGRESSION_METRICS = ["mse", "mae", "rmse", "mbe", "nll"]
+UQ_METRICS = ["uce", "ence", "auce", "r09", "c_v", "srp", "ause_rmse", "ause_uce"]
+METRICS = list(chain(REGRESSION_METRICS, UQ_METRICS))
+UQ_METRICS = ["uce", "ence", "auce", "r09", "c_v", "srp", "ause_rmse", "ause_uce"]
+
 VARIABLE_NAMES = ['P95', 'MeanH', 'Dens', 'Gini', 'Cover']
 EAST = ['346', '9', '341', '354', '415', '418', '416', '429', '439', '560', '472', '521', '498',
         '522', '564', '764', '781', '825', '796', '805', '827', '891', '835', '920', '959', '1023', '998',
         '527', '477', '542', '471']
 WEST = ['528', '537', '792', '988', '769']
 NORTH = ['819', '909', '896']
-GROUPS = {"east": EAST, "west": WEST, "north": NORTH}
-GLOBAL = EAST+WEST+NORTH
+GLOBAL = ["west", "east", "north"]
+GROUPS = {"east": EAST, "west": WEST, "north": NORTH, "global": GLOBAL}
 
 """
 TODO:
@@ -21,8 +25,11 @@ TODO:
 - compute on all projects as binning cannot be undone :/
 """
 
+def weighted_avg(values, counts, axis):
+    return np.nansum(values*counts, axis=axis)/np.nansum(counts, axis=axis)
+
 # Binned variance
-def binned_variance(diff, variance, n_bins, *args, **kwargs):
+def binned_variance(diff, variance, n_bins, var_mins=None, var_maxs=None, *args, **kwargs):
     """
     Compute mean MSE and mean variance in linear bins
 
@@ -44,7 +51,9 @@ def binned_variance(diff, variance, n_bins, *args, **kwargs):
     # loop on variables
     for i, (var, eps) in enumerate(zip(variance, diff)):
         # Bin variance linearly and get sample indexes
-        bins = np.linspace(var.min(), var.max(), n_bins)
+        var_min = var_mins[i] if var_mins is not None else var.min()
+        var_max = var_maxs[i] if var_maxs is not None else var.max()
+        bins = np.linspace(var_min, var_max, n_bins)
         bins_ids = np.digitize(var, bins=bins)-1 # digitize is in [1, n_bins] => -1 makes [0, n_bins-1]
         # loop on bins to compute stats
         for bin_id in range(n_bins):
@@ -71,34 +80,22 @@ def mae(diff, *args, **kwargs): return np.abs(diff).mean(1)
 def mse(diff, *args, **kwargs): return (diff**2).mean(1)
 def rmse(diff, *args, **kwargs): return np.sqrt((diff**2).mean(1))
 def mbe(diff, *args, **kwargs): return diff.mean(1)
-def mse_p(diff, labels_mean, *args, **kwargs): return mse(diff)/labels_mean**2 #return (diff**2).mean(1)/diff.max(1)
-def rmse_p(diff, labels_mean, *args, **kwargs): return rmse(diff)/np.abs(labels_mean) # return np.sqrt(rmse(diff, *args, **kwargs))
-def mae_p(diff, labels_mean, *args, **kwargs): return mae(diff)/np.abs(labels_mean) #return mae(diff, *args, **kwargs)/diff.max(1)
-def mbe_p(diff, labels_mean, *args, **kwargs): return mbe(diff)/labels_mean #return mbe(diff, *args, **kwargs)/diff.max(1)
 
 def nll(diff, variance, nll_eps, *args, **kwargs):
     v = variance
     v[v<nll_eps] = nll_eps # avoid numerical issues
     return 0.5 * (np.log(v) + (diff**2)/v).mean(1)
 
-def nll_p(diff, variance, nll_eps, labels_mean, *args, **kwargs): return nll(diff, variance, nll_eps)/labels_mean**2
-
 # UQ metrics
 def uce(mean_mses, mean_vars, histogram, *args, **kwargs): 
     N = histogram[0].sum()
     return np.nansum(histogram*np.abs(mean_vars-mean_mses), axis=1)/N
 
-# def uce_p(mean_mses, mean_vars, histogram, *args, **kwargs): 
-#     return uce(mean_mses, mean_vars, histogram)/np.nanmax(np.abs(mean_mses-mean_vars), axis=1)
-def uce_p(mean_mses, mean_vars, histogram, labels_mean, *args, **kwargs): 
-    return uce(mean_mses, mean_vars, histogram)/labels_mean**2
-
-def ence(mean_mses, mean_vars, histogram, *args, **kwargs):
-    N = histogram[0].sum()
-    return np.nansum(np.abs(mean_vars-mean_mses)/mean_vars, axis=1)/N
-
-def ence_p(mean_mses, mean_vars, histogram, labels_mean, *args, **kwargs):
-    return ence(mean_mses, mean_vars, histogram)/np.abs(labels_mean)
+# def ence(mean_rmses, mean_stds, histogram, *args, **kwargs):
+    # N = histogram[0].sum()
+    # return np.nansum(np.abs(mean_stds-mean_rmses)/mean_stds, axis=1)/N
+def ence(mean_rmses, mean_vars, *args, **kwargs):
+    return np.nansum(np.abs(bin_stds-bin_rsmes)/bin_rmses, axis=1)
 
 def empirical_accuracy(diff, variance, rho, *args, **kwargs):
     N = diff.shape[1]
@@ -108,15 +105,9 @@ def empirical_accuracy(diff, variance, rho, *args, **kwargs):
     empirical_acc = np.count_nonzero(np.abs(diff)<half_width, axis=1)/N
     return empirical_acc
 
-def auce(diff, variance, n_rho, rho_min, rho_max, *args, **kwargs):
-    """
-    From diff:
-        -CDF^-1((rho+1)/2)*variance < diff < CDF^-1((rho+1)/2)*variance
-        => |diff| < CDF^-1((rho+1)/2)*variance
-    """
+def auce(diff, variance, n_rho, expected_accs, return_acc=False, *args, **kwargs):
     d, N = diff.shape
     # accuracies
-    expected_accs = np.linspace(rho_min, rho_max, n_rho) # (n_rho,)
     empirical_accs = []
     for rho in expected_accs:
         # compute empirical acc
@@ -127,25 +118,21 @@ def auce(diff, variance, n_rho, rho_min, rho_max, *args, **kwargs):
     expected_accs = np.stack([expected_accs]*d, axis=0)
     # compute AU
     au = area_under_spline(x=expected_accs, y=np.abs(expected_accs-empirical_accs))
-    return au
+    if return_acc: return au, empirical_accs
+    else: return au
 
 def r09(diff, variance, *args, **kwargs): 
     return empirical_accuracy(diff, variance, rho=0.9)
 
-def c_v(variance, *args, **kwargs):
+def c_v(std, mean_std, *args, **kwargs):
     n = variance.shape[1]
     std = np.sqrt(variance)
-    mv = np.expand_dims(std.mean(1), axis=1) # (d,1)
-    return np.sqrt(1/(n-1)*((std-mv)**2).sum(1))/mv.squeeze(1)
+    mv = np.expand_dims(mean_std, axis=1) # (d,1)
+    return np.sqrt(1/(n-1)*((std-mv)**2).sum(1))/mean_std
     # return np.sqrt(((std-mv)**2).sum(1)/(n-1))/mv.squeeze(1)
 
 def srp(variance, *args, **kwargs):
     return variance.mean(1)
-
-# def srp_p(variance, *args, **kwargs):
-#     return srp(variance, *args, **kwargs)/variance.max(1)
-def srp_p(variance, labels_mean, *args, **kwargs):
-    return srp(variance, *args, **kwargs)/labels_mean**2
 
 def ause(variance, metric, ause_m, *args, **kwargs):
     """
@@ -184,7 +171,7 @@ def ause(variance, metric, ause_m, *args, **kwargs):
         }
         tmp_kwargs["variance"]=tmp_var
         # get variance bin if needed
-        if metric in  [uce, uce_p, ence, ence_p]:
+        if metric in  [uce, ence]:
             mean_mses, mean_vars, histogram = binned_variance(*tmp_args, **tmp_kwargs)
             tmp_kwargs["mean_vars"]=mean_vars
             tmp_kwargs["mean_mses"]=mean_mses
@@ -289,7 +276,246 @@ class RUQMetrics:
 
     def aggregate_all(self):
         _ = self.aggregate_entity(compute_intermediary=True)
-        for group_id in GROUPS.keys(): _ = self.aggregate_entity(group_id=group_id, compute_intermediary=False)    
+        for group_id in GROUPS.keys(): _ = self.aggregate_entity(group_id=group_id, compute_intermediary=False)
+
+class OnlineRUQMetrics:
+    """
+    Online metrics:
+        - Error-based (mse, mae, rmse, mbe): E = (f(diff) + N*E)/(N+1); N+=1 (w/ diff=(gt-mu)**2)
+        - NLL                              : L = (l + 2*N*L)/(2*(N+1)); N+=1 (w/ l=log(var)+diff**2/var)
+        - binned variance-based (uce, ence): 
+            - Precompute a high resolution histogram: H_hi = {|B_hi(k)|: k=0,...,M_hi-1} between pred_var_max and pred_var_min (across all predicitions)
+            - When computing a metric, 
+                - Downsample to get *_lo(i), i=0,...,M_lo-1
+                    - Constant bin width: m = M_hi/M_lo
+                        - |B_lo(i)| = sum_{k=0,...,m-1}|B_hi(k+m*i)|
+                        - mean_x_lo(i) = 1/|B_lo(i)|*|sum_{k=0,...,m-1}|B_hi(k+m*i)|*mean_x_hi(i+m*k)
+                    - Almost constant bin density:
+                        - TODO
+                - Compute metric on downsampled arrays
+        - ause                             :
+            - Use the high resolution histogram. ause_m is used to select a number of bins to remove.
+            - Remove the required bins and compute the metric by unbinning (i.e. downsampling to n_bins=1) the remaining bins
+    """
+    def __init__(
+        self,
+        # High resolution binning
+        var_lo,
+        var_hi,
+        n_bins,
+        # NLL
+        nll_eps=1e-6
+        # AUCE
+        n_rho=100,
+        rho_min=1e-3
+        rho_max=1-1e-3
+        # AUSE
+        ause_step=.05,
+    ):
+        self.var_lo = var_lo
+        self.var_hi = var_hi
+        self.n_bins = n_bins
+        self.nll_eps = nll_eps
+        self.n_rho = n_rho
+        self.rho_min = rho_min
+        self.rho_max = rho_max 
+        self.ause_step = ause_step
+        # accumulators
+        self.metrics = {}
+        self.counts = {}
+        self.bin_mses = {}
+        self.bin_vars = {}
+        self.histogram = {} # hi resolution histogram (lo resolution is computed on demand)
+        # internal global variables
+        self.error_metrics = ["mse", "mae", "rmse", "mbe"]
+        self.methods_suffix = ["errors", "nll", "ence", "auce", "r09", "c_v", "srp", "ause_rmse", "ause_uce"]
+        self.auce_rhos = np.linspace(rho_min, rho_max, n_rho)
+
+    def add(self, project_id, means, gt, variance):
+        assert mean.shape == variance.shape == gt.shape
+        assert mean.shape[0]==len(self.variable_names), f"arrays must be of shape (num_variables, num_samples)"
+        assert not project_id in self.metrics.keys(), f"{project_id} was already added"
+        self.metrics[project_id] = {}
+        # masked difference
+        mask = ~np.isnan(mean).all(0)
+        diff = mean[:,mask]-gt[:,mask] # (d,n)
+        variance = variance[:,mask] # (d,n)
+        # Counts
+        self.counts[project_id] = diff.shape[1]
+        # Binning
+        p_mean_mses, p_mean_vars, p_histogram = binned_variance(diff, variance, self.n_bins, self.var_lo, self.var_hi)
+        self.bin_mses[project_id] = p_mean_mses
+        self.bin_vars[project_id] = p_mean_vars
+        self.histogram[project_id] = p_histogram
+        # Error based metrics
+        self._add_errors(diff, self.metrics[project_id])
+        # NLL
+        self._add_nll(diff, variance, self.metrics[project_id])
+        # uce
+        self._add_uce(p_mean_mses, p_mean_vars, p_histogram, self.metrics[project_id])
+        # ence
+        p_mean_rmses = np.sqrt(p_mean_mses)
+        p_mean_stds = np.sqrt(p_mean_vars)
+        self._add_ence(p_mean_rmses, p_mean_stds, self.metrics[project_id])
+        # auce
+        self._add_auce(diff, variance, self.metrics[project_id])
+        # r09
+        self._add_r09(diff, variance, self.metrics[project_id])
+        # c_v
+        self._add_c_v(variance, self.metrics[project_id])
+        # srp
+        self._add_srp(variance, self.metrics[project_id])
+        # ause_rmse
+        # ause_uce
+
+    def agg(self, groups=GROUPS):
+        for group_id, group_keys in groups.items():
+            if not group_id in self.metrics.keys(): self.metrics[group_id] = {}
+            # Add count
+            self.counts[group_id] = np.stack([self.counts[k] for k in group_keys], axis=-1).sum(1)
+            # Apply aggregation
+            for method_suffix in self.methods_suffix:
+                eval(f"self._agg_{method_suffix}")(group_id, group_keys)
+
+    def resample_histogram(self, M_new, kind="linear"):
+        if kind == "linear":
+            raise NotImplementedError()
+        else:
+            raise ValueError(f"Invalid: kind={kind}")
+
+    # Errors
+    def _add_errors(self, diff, m_dict):
+        d = diff.shape[0]
+        for metric in self.error_metrics:
+            m_dict[metric] = eval(metric)(diff)
+            assert m_dict[metric].shape == (d,)
+
+    def _agg_errors(self, group_id, group_keys):
+        counts = np.stack([self.counts[k] for k in group_keys], axis=-1) # (d, P)
+        for metric inself.error_metrics:
+            errors = np.stack([self.metrics[k][metric] for k in group_keys], axis=-1) # (d, P) w. P: group size
+            self.metrics[group_id][metric] = weighted_avg(errors, counts, axis=1) # (d,)
+
+    # NLL
+    def _add_nll(self, diff, variance, m_dict):
+        d = diff.shape[0]
+        m_dict["nll"] = nll(diff, variance, self.nll_eps)
+        assert m_dict["nll"].shape == (d,)
+
+    def _agg_nll(self, group_id, group_keys):
+        losses = np.stack([self.metrics[k]["nll"] for k in group_keys], axis=-1) # (d, P) w. P: group size
+        counts = np.stack([self.counts[k] for k in group_keys], axis=-1) # (d, P)
+        self.metrics[group_id]["nll"] = weighted_avg(losses, counts, axis=1) # (d,)
+
+    # uce
+    def _add_uce(self, p_mean_mses, p_mean_vars, p_histogram, m_dict):
+        d, M = p_mean_mses.shape
+        assert M==self.n_bins 
+        m_dict["uce"] = uce(p_mean_mses, p_mean_vars, p_histogram)
+        assert m_dict["uce"].shape == (d,)
+
+    def _agg_uce(self, group_id, group_keys):
+        H = self.stack([self.histogram[k] for k in group_keys], axis=-1) # (d, M, P) w. M: n_bins, P: group size
+        b_mses = self.stack([self.bin_mses[k] for k in group_keys], axis=-1) # (d, M, P)
+        b_vars = self.stack([self.bin_vars[k] for k in group_keys], axis=-1) # (d, M, P)
+        counts = np.stack([self.counts[k] for k in group_keys], axis=-1) # (d, P)
+        assert counts.shape[0]==b_mses.shape[0]==b_vars.shape[0]==H-shape[0]
+        d = counts.shape[0]
+        assert (np.nansum(H,axis=2)==counts).all(), "unmatching histogram and counts"
+        assert (np.nansum(H,axis=(1,2))==np.nansum(counts,axis=1)).all(), "unmatching histogram and counts"
+        N = np.nansum(counts, axis=1)
+        value = bin_mses-bin_vars
+        value = H*value
+        value = np.abs(value)
+        value = np.nansum(value, axis=2)
+        value = value**2 / np.nansum(H, axis=2)
+        value = np.nansum(value, axis=1) / N
+        assert value.shape == (d,)
+        self.metrics[group_id]["uce"] = value
+
+    # ence
+    def _add_ence(self, p_mean_rmses, p_mean_stds, m_dict):
+        d, M = p_mean_mses.shape
+        assert M==self.n_bins
+        m_dict["ence"] = ence(p_mean_rmses, p_mean_stds)
+        assert m_dict["ence"].shape == (d,)
+
+    def _agg_ence(self, group_id, group_keys):
+        H = self.stack([self.histogram[k] for k in group_keys], axis=-1) # (d, M, P) w. M: n_bins, P: group size
+        b_rmses = np.sqrt(self.stack([self.bin_mses[k] for k in group_keys], axis=-1)) # (d, M, P)
+        b_vars = np.sqrt(self.stack([self.bin_vars[k] for k in group_keys], axis=-1)) # (d, M, P)
+        counts = np.stack([self.counts[k] for k in group_keys], axis=-1) # (d, P)
+        assert counts.shape[0]==b_rmses.shape[0]==b_stds.shape[0]==H-shape[0]
+        d = counts.shape[0]
+        assert (np.nansum(H,axis=2)==counts).all(), "unmatching histogram and counts"
+        assert (np.nansum(H,axis=(1,2))==np.nansum(counts,axis=1)).all(), "unmatching histogram and counts"
+        value = np.nansum(H*bin_stds, axis=2)**0.5-np.nansum(H*bin_rmses, axis=2)**0.5
+        value = np.abs(value)/(np.nansum(H*bin_stds, axis=2)**0.5)
+        value = np.nansum(value, axis=1)
+        assert value.shape == (d,)
+        self.metrics[group_id]["ence"] = value
+
+    # auce
+    def _add_auce(self, diff, variance, m_dict):
+        d = diff.shape[0]
+        ause_rhos = np.linspace(self.rho_min, self.rho_max, self.n_rho) # (d,)
+        auce_, empirical_accs = auce(diff, variance, ause_rhos, return_accs=True)
+        assert auce_.shape == (d,)
+        assert empirical_accs.shape[0] == d
+        m_dict["empirical_accs"] = empirical_accs
+        m_dict["auce"] = auce_
+
+    def _agg_auce(self, group_id, group_keys):
+        empirical_accs = np.stack([self.metrics[k]["empirical_accs"] for k in group_keys], axis=1) # (d, P, n_rho) w. P: group size
+        counts = np.expand_dims(np.stack([self.counts[k] for k in group_keys], axis=-1), axis=-1) # (d, P, 1)
+        empirical_accs = weighted_avg(empirical_accs, counts, axis=1) # (d, n_rho)
+        d = counts.shape[0]
+        expected_accs = np.stack([np.linspace(self.rho_min, self.rho_max, self.n_rho)]*d, axis=0)
+        assert expected_accs.shape==empirical_accs.shape
+        self.metrics[group_id]["auce"] = area_under_spline(x=expected_accs, y=np.abs(expected_accs-empirical_accs))
+
+    # r09
+    def _add_r09(self, diff, variance, m_dict):
+        d = diff.shape[0]
+        m_dict["r09"] = r09(diff, variance)
+        assert m_dict["r09"].shape[0]==(d,)
+
+    def agg_r09(self, group_id, group_keys):
+        empirical_accs = np.stack([self.metrics[k]["empirical_accs"] for k in group_keys], axis=1) # (d, P) w. P: group size
+        counts = np.expand_dims(np.stack([self.counts[k] for k in group_keys], axis=-1), axis=-1) # (d, P)
+        self.metrics[group_id]["r09"] = weighted_avg(empirical_accs, counts)
+
+    # c_v
+    def _add_c_v(self, variance, m_dict):
+        d = variance.shape[0]
+        std = np.sqrt(variance) # (d,n)
+        mean_std = std.mean(1) # (d,)
+        m_dict["c_v_mean_std"] = mean_std
+        m_dict["c_v"] = c_v(std, mean_std) # (d,)
+        assert m_dict["c_v"].shape == (d,)
+
+    def _agg_c_v(self, group_id, group_keys):
+        m_stds = np.stack([self.metrics[k]["c_v_mean_std"] for k in group_keys], axis=-1) # (d, P) w. P: group size
+        c_vs = np.stack([self.metrics[k]["c_v"] for k in group_keys], axis=-1) # (d, P)
+        counts = np.stack([self.counts[k] for k in group_keys], axis=-1) # (d, P)
+        m_std = weighted_avg(m_stds, counts, axis=1)
+        self.metrics[group_id]["c_v_mean_std"] = m_std
+        self.metrics[group_id]["c_v"] = np.sqrt(c_vs**2*m_stds**2*(counts-1)/((counts.sum(1)-1)))/m_std
+
+    # srp
+    def _add_srp(self, variance, m_dict):
+        d = variance.shape[0]
+        m_dict["srp"] = srp(variance)
+        assert m_dict["srp"].shape == (d,)
+
+    def _agg_srp(self, group_id, group_keys):
+        srps = np.stack([self.metrics[k]["srp"] for k in group_keys], axis=-1) # (d, P) w. P: group size
+        counts = np.stack([self.counts[k] for k in group_keys], axis=-1) # (d, P)
+        self.metrics[group_id]["srp"] = weighted_avg(srps, counts, axis=1) # (d,)
+
+    # ause_rmse
+
+    # ause_uce
 
 def main(N_projects):
     from pathlib import Path
@@ -329,7 +555,7 @@ def main(N_projects):
         print(f"{entity}:")
         for m, vs in em.items():
             print(f"    {m}: {', '.join(['{:.3f}'.format(v) for v in vs])}")
-
+ 
 def test(d=2, verbose=True):
     # dims
     d, N = (d,30)
