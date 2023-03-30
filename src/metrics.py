@@ -18,12 +18,6 @@ NORTH = ['819', '909', '896']
 GLOBAL = ["west", "east", "north"]
 GROUPS = {"east": EAST, "west": WEST, "north": NORTH, "global": GLOBAL}
 
-"""
-TODO:
-- test if setting mean_{mses, vars} to nan when histo == 0 creates issues (i.e. should use np.nansum, nanmean, etc. later?)
-- test on known inputs!
-- compute on all projects as binning cannot be undone :/
-"""
 
 def weighted_avg(values, counts, axis):
     return np.nansum(values*counts, axis=axis)/np.nansum(counts, axis=axis)
@@ -75,6 +69,29 @@ def binned_variance(diff, variance, n_bins, var_mins=None, var_maxs=None, *args,
 def area_under_spline(x, y):
     return 0.5*((x[:,1:]-x[:,:-1])*(y[:,:-1]+y[:,1:])).sum(1)
 
+def sparsification_curve_x(variance, x, m, arr_dict):
+    """arr_dict contain arrays on which to compute x"""
+    N = variance.shape[1]
+    nus = np.array([k*m for k in range(int(1/m)+1)])
+    # sparsification curve
+    sc = []
+    # sort indexes by increasing variance
+    sorted_idx = np.argsort(variance, axis=1)
+    # sort argument arrays
+    for k, v in arr_dict.items():
+        arr_dict[k] = np.take_along_axis(v, sorted_idx, axis=1)
+    for nu in nus:
+        idxs = np.take_along_axis(sorted_idx, sorted_idx)
+        # create sub_arrays
+        sub_arr_dict = {}
+        for k, v in arr_dict.items():
+            sub_arr_dict[k] = v[:,:int(nu*N)]
+        sc.append(x(**sub_arr_dict))
+    # make nus, sc array for AU
+    sc = np.stack(sc, axis=1) # (d, 1/m)
+    nus = np.stack([nus for _ in range(5)], axis=0) # (d, 1/m)
+    return nus, sc
+
 # Regression metrics
 def mae(diff, *args, **kwargs): return np.abs(diff).mean(1)
 def mse(diff, *args, **kwargs): return (diff**2).mean(1)
@@ -94,8 +111,8 @@ def uce(mean_mses, mean_vars, histogram, *args, **kwargs):
 # def ence(mean_rmses, mean_stds, histogram, *args, **kwargs):
     # N = histogram[0].sum()
     # return np.nansum(np.abs(mean_stds-mean_rmses)/mean_stds, axis=1)/N
-def ence(mean_rmses, mean_vars, *args, **kwargs):
-    return np.nansum(np.abs(bin_stds-bin_rsmes)/bin_rmses, axis=1)
+def ence(mean_rmses, mean_stds, *args, **kwargs):
+    return np.nansum(np.abs(mean_stds-mean_rmses)/mean_rmses, axis=1)
 
 def empirical_accuracy(diff, variance, rho, *args, **kwargs):
     N = diff.shape[1]
@@ -125,14 +142,16 @@ def r09(diff, variance, *args, **kwargs):
     return empirical_accuracy(diff, variance, rho=0.9)
 
 def c_v(std, mean_std, *args, **kwargs):
-    n = variance.shape[1]
-    std = np.sqrt(variance)
+    n = std.shape[1]
     mv = np.expand_dims(mean_std, axis=1) # (d,1)
     return np.sqrt(1/(n-1)*((std-mv)**2).sum(1))/mean_std
     # return np.sqrt(((std-mv)**2).sum(1)/(n-1))/mv.squeeze(1)
 
 def srp(variance, *args, **kwargs):
     return variance.mean(1)
+
+def ause(nus, sc):
+    return area_under_spline(nus, sc)
 
 def ause(variance, metric, ause_m, *args, **kwargs):
     """
@@ -304,11 +323,11 @@ class OnlineRUQMetrics:
         var_hi,
         n_bins,
         # NLL
-        nll_eps=1e-6
+        nll_eps=1e-6,
         # AUCE
         n_rho=100,
-        rho_min=1e-3
-        rho_max=1-1e-3
+        rho_min=1e-3,
+        rho_max=1-1e-3,
         # AUSE
         ause_step=.05,
     ):
@@ -332,13 +351,13 @@ class OnlineRUQMetrics:
         self.auce_rhos = np.linspace(rho_min, rho_max, n_rho)
 
     def add(self, project_id, means, gt, variance):
-        assert mean.shape == variance.shape == gt.shape
-        assert mean.shape[0]==len(self.variable_names), f"arrays must be of shape (num_variables, num_samples)"
+        assert means.shape == variance.shape == gt.shape
+        assert means.shape[0]==len(self.variable_names), f"arrays must be of shape (num_variables, num_samples)"
         assert not project_id in self.metrics.keys(), f"{project_id} was already added"
         self.metrics[project_id] = {}
         # masked difference
-        mask = ~np.isnan(mean).all(0)
-        diff = mean[:,mask]-gt[:,mask] # (d,n)
+        mask = ~np.isnan(means).all(0)
+        diff = means[:,mask]-gt[:,mask] # (d,n)
         variance = variance[:,mask] # (d,n)
         # Counts
         self.counts[project_id] = diff.shape[1]
@@ -392,7 +411,7 @@ class OnlineRUQMetrics:
 
     def _agg_errors(self, group_id, group_keys):
         counts = np.stack([self.counts[k] for k in group_keys], axis=-1) # (d, P)
-        for metric inself.error_metrics:
+        for metric in self.error_metrics:
             errors = np.stack([self.metrics[k][metric] for k in group_keys], axis=-1) # (d, P) w. P: group size
             self.metrics[group_id][metric] = weighted_avg(errors, counts, axis=1) # (d,)
 
@@ -416,42 +435,43 @@ class OnlineRUQMetrics:
 
     def _agg_uce(self, group_id, group_keys):
         H = self.stack([self.histogram[k] for k in group_keys], axis=-1) # (d, M, P) w. M: n_bins, P: group size
-        b_mses = self.stack([self.bin_mses[k] for k in group_keys], axis=-1) # (d, M, P)
-        b_vars = self.stack([self.bin_vars[k] for k in group_keys], axis=-1) # (d, M, P)
+        bin_mses = self.stack([self.bin_mses[k] for k in group_keys], axis=-1) # (d, M, P)
+        bin_vars = self.stack([self.bin_vars[k] for k in group_keys], axis=-1) # (d, M, P)
         counts = np.stack([self.counts[k] for k in group_keys], axis=-1) # (d, P)
-        assert counts.shape[0]==b_mses.shape[0]==b_vars.shape[0]==H-shape[0]
+        assert counts.shape[0]==bin_mses.shape[0]==bin_vars.shape[0]==H.shape[0]
         d = counts.shape[0]
         assert (np.nansum(H,axis=2)==counts).all(), "unmatching histogram and counts"
         assert (np.nansum(H,axis=(1,2))==np.nansum(counts,axis=1)).all(), "unmatching histogram and counts"
         N = np.nansum(counts, axis=1)
         value = bin_mses-bin_vars
         value = H*value
-        value = np.abs(value)
         value = np.nansum(value, axis=2)
-        value = value**2 / np.nansum(H, axis=2)
+        value = np.abs(value)
         value = np.nansum(value, axis=1) / N
         assert value.shape == (d,)
         self.metrics[group_id]["uce"] = value
 
     # ence
     def _add_ence(self, p_mean_rmses, p_mean_stds, m_dict):
-        d, M = p_mean_mses.shape
+        d, M = p_mean_rmses.shape
         assert M==self.n_bins
         m_dict["ence"] = ence(p_mean_rmses, p_mean_stds)
         assert m_dict["ence"].shape == (d,)
 
     def _agg_ence(self, group_id, group_keys):
         H = self.stack([self.histogram[k] for k in group_keys], axis=-1) # (d, M, P) w. M: n_bins, P: group size
-        b_rmses = np.sqrt(self.stack([self.bin_mses[k] for k in group_keys], axis=-1)) # (d, M, P)
-        b_vars = np.sqrt(self.stack([self.bin_vars[k] for k in group_keys], axis=-1)) # (d, M, P)
+        bin_mses = self.stack([self.bin_mses[k] for k in group_keys], axis=-1) # (d, M, P)
+        bin_vars = self.stack([self.bin_vars[k] for k in group_keys], axis=-1) # (d, M, P)
         counts = np.stack([self.counts[k] for k in group_keys], axis=-1) # (d, P)
-        assert counts.shape[0]==b_rmses.shape[0]==b_stds.shape[0]==H-shape[0]
+        assert counts.shape[0]==bin_mses.shape[0]==bin_vars.shape[0]==H.shape[0]
         d = counts.shape[0]
         assert (np.nansum(H,axis=2)==counts).all(), "unmatching histogram and counts"
         assert (np.nansum(H,axis=(1,2))==np.nansum(counts,axis=1)).all(), "unmatching histogram and counts"
-        value = np.nansum(H*bin_stds, axis=2)**0.5-np.nansum(H*bin_rmses, axis=2)**0.5
-        value = np.abs(value)/(np.nansum(H*bin_stds, axis=2)**0.5)
-        value = np.nansum(value, axis=1)
+        N = np.nansum(counts, axis=1)
+        value = np.sqrt(np.nansum(H*bin_vars, axis=2))
+        value -= np.sqrt(np.nansum(H*bin_mses, axis=2))
+        value /= np.sqrt(np.nansum(H*bin_vars, axis=2))
+        value = np.nansum(value, axis=1)/N 
         assert value.shape == (d,)
         self.metrics[group_id]["ence"] = value
 
@@ -473,7 +493,7 @@ class OnlineRUQMetrics:
         expected_accs = np.stack([np.linspace(self.rho_min, self.rho_max, self.n_rho)]*d, axis=0)
         assert expected_accs.shape==empirical_accs.shape
         self.metrics[group_id]["auce"] = area_under_spline(x=expected_accs, y=np.abs(expected_accs-empirical_accs))
-
+    
     # r09
     def _add_r09(self, diff, variance, m_dict):
         d = diff.shape[0]
@@ -484,6 +504,14 @@ class OnlineRUQMetrics:
         empirical_accs = np.stack([self.metrics[k]["empirical_accs"] for k in group_keys], axis=1) # (d, P) w. P: group size
         counts = np.expand_dims(np.stack([self.counts[k] for k in group_keys], axis=-1), axis=-1) # (d, P)
         self.metrics[group_id]["r09"] = weighted_avg(empirical_accs, counts)
+
+    # ause_x
+    def _add_ause_x(self, variance, x, arr_dict, m_dict):
+        d = variance.shape[0]
+        scurve = sparsification_curve_x(variance, x, arr_dict)
+        m_dict[f"ause_{x.__name__}"] = ause(*scurve)
+        assert m_dict[f"ause_{x.__name__}"].shape == (d,)
+    def _agg_ause_x(self, variance, x, arr_dict): pass
 
     # c_v
     def _add_c_v(self, variance, m_dict):
@@ -512,10 +540,6 @@ class OnlineRUQMetrics:
         srps = np.stack([self.metrics[k]["srp"] for k in group_keys], axis=-1) # (d, P) w. P: group size
         counts = np.stack([self.counts[k] for k in group_keys], axis=-1) # (d, P)
         self.metrics[group_id]["srp"] = weighted_avg(srps, counts, axis=1) # (d,)
-
-    # ause_rmse
-
-    # ause_uce
 
 def main(N_projects):
     from pathlib import Path
