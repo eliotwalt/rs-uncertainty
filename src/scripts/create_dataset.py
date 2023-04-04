@@ -586,6 +586,7 @@ def aggregate(cfg_f):
             print("Done.")
     # Compute variables statistics
     print("Computing variables statistics ...")
+    patch_size = cfg["patch_size"]
     s2_stats = RunningStats((12,))
     s1_stats = RunningStats((2,))
     labels_stats = RunningStats((5,))
