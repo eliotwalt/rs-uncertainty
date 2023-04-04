@@ -2,38 +2,30 @@ import os, sys
 root = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, root)
 import rasterio
-from metrics import RUQMetrics 
+import argparse
+import yaml
+import numpy as np
+from tqdm import tqdm
+from pathlib import Path
+from rcu_metrics import StratifiedRCU
 
-# 0. Global variables
-PREDICTIONS_DIR = 
-PKL_DIR =
-GT_DIR =
-EAST = ['346', '9', '341', '354', '415', '418', '416', '429', '439', '560', '472', '521', '498',
-        '522', '564', '764', '781', '825', '796', '805', '827', '891', '835', '920', '959', '1023', '998',
-        '527', '477', '542', '471']
-WEST = ['528', '537', '792', '988', '769']
-NORTH = ['819', '909', '896']
-ALL = EAST + WEST + NORTH
+def _path(x):
+    try:
+        return Path(x)
+    except Exception as e: raise e
 
-# Get min/max predicted variances for online binning
+def pjoin(*subs): return Path(os.path.abspath(os.path.join(*subs)))
 
-# Iterate on projects
-    # load test predictions
-    # load test gt
-    # load train predicitons
-    # compute training_means and training_stds
-    # standardize predicitions and gt
-    # add project to online metrics
-
-# Aggregate projects
-
-# Save meetrics
+def parse_args():
+    p = argparse.ArgumentParser()
+    p.add_argument("--cfg", help="Path to prediction config file", required=True, type=_path)
+    return p.parse_args()
 
 def main():
     """
-    - load standardization data
-    - loop on projects, compute variance bounds online
-    - init rcu
+    x load standardization data
+    x loop on projects, compute variance bounds online
+    x init rcu
     - loop on projects
         - standardize
         - add project
@@ -42,4 +34,73 @@ def main():
         - get(region)
     - save results (incl. histogram)
     """
-    pass
+    results = {}
+    # Load config
+    args = parse_args()
+    print(f"Loading config file {args.cfg}...")
+    with args.cfg("r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+    projects = cfg["projects_east"]+cfg["projects_west"]+cfg["projects_north"]
+    # Load standardization data
+    with pjoin(args.cfg["pkl_dir"], "stats.yaml").open("r", encoding="utf-8") as f:
+        stats = yaml.safe_load(f)
+    labels_mean = np.array(stats["labels_mean"])
+    labels_std = np.array(stats["labels_std"])
+    # loop on projects to get variance bounds
+    print(f"Computing variance bounds in {cfg['pkl_dir']}...")
+    lo_variance = np.full((5,), np.inf)
+    hi_variance = np.full((5,), -np.inf)
+    for variance_file in tqdm(cfg["pkl_dir"].glob("*_variance.tif")):
+        if variance_file.stem.split("_")[0] not in projects: continue
+        with rasterio.open(variance_file) as fh:
+            variance = fh.read(fh.indexes)
+        variance_flat = variance.reshape(5, -1)
+        hi = np.nanmax(variance_flat, axis=1)
+        lo = np.nanmin(variance_flat, axis=1)
+        hi_variance[hi>hi_variance] = hi[hi>hi_variance]
+        lo_variance[lo<lo_variance] = lo[lo<lo_variance]
+    # initialize RCU metrics
+    print("Initiating StratifiedRCU object...")
+    rcu = StratifiedRCU(
+        num_variables=len(cfg["data_bands"]),
+        num_groups=len(projects),
+        num_bins=cfg["num_bins"],
+        lo_variance=lo_variance,
+        hi_variance=hi_variance
+    )
+    # compute stats online
+    print(f"Computing stats online from in {cfg['pkl_dir']}...")
+    for mean_file in tqdm(cfg["pkl_dir"].glob('*_mean.tif')):
+        # load data
+        project = mean_file.stem.split('_')[0]
+        if project not in projects: continue
+        with rasterio.open(mean_file) as fh:
+            mean = fh.read(fh.indexes)
+        with rasterio.open(pjoin(cfg['prediction_dir'], f"{project}_variance.tif")) as fh:
+            variance = fh.read(fh.indexes)
+        with rasterio.open(pjoin(cfg['gt_dir'], f"{project}.tif")) as fh:
+            gt = fh.read(fh.indexes)
+        # standardize
+        variance /= (labels_std)**2
+        mean = (mean-labels_mean)/labels_std
+        gt = (gt-labels_mean)/labels_std 
+        # add project
+        rcu.add_project(project, gt, mean, variance)
+        # get project metrics
+        results[project] = rcu.get(project)
+    # compute regions
+    print(f"Aggregegating metrics...")
+    for region in ["east", "west", "north"]:
+        region_projects = cfg[f"projects_{region}"]
+        results[region] = rcu.get_subset(region_projects)
+    # compute all
+    print(f"Aggregating across all projects...")
+    results["global"] = rcu.get_all()
+    # write results
+    res_file = pjoin(cfg["prediction_dir"], "metrics.yaml")
+    print(f"writing results to {res_file}...")
+    with res_file.open("w", encoding="utf-8") as f:
+        yaml.dump(results, f, sort_keys=False)
+    print("Done.")
+
+if __name__ == "__main__": main()

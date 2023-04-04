@@ -1,4 +1,4 @@
-import sys
+import sys, os
 import random
 import yaml
 from typing import List, Tuple
@@ -14,16 +14,15 @@ import rasterio.features
 from torchvision.transforms import Compose, Normalize
 from blowtorch import Run
 
-sys.path.append('src')
+root = os.path.dirname(os.path.dirname(__file__))
+sys.path.insert(0, root)
 from models import ResNext
 from data import ToTensor, SelectChannels
 
 SEPARATOR = 65535
 
-
 def parse_date(date_str) -> datetime:
     return datetime.strptime(date_str, '%Y%m%d')
-
 
 run = Run(config_files=['config/predict_testset-dev.yaml'])
 run.seed_all(12345)
@@ -99,9 +98,9 @@ for gt_file_path in Path(run['gt_dir']).glob('*.tif'):
     )
 
     print(f'Reading in images for {gt_file_path.name}...')
-    s2_images: [Tuple[np.ndarray, datetime]] = []
-    s1_images_ascending: [Tuple[np.ndarray, datetime]] = []
-    s1_images_descending: [Tuple[np.ndarray, datetime]] = []
+    s2_images: List[Tuple[np.ndarray, datetime]] = []
+    s1_images_ascending: List[Tuple[np.ndarray, datetime]] = []
+    s1_images_descending: List[Tuple[np.ndarray, datetime]] = []
 
     for img_path in (Path(run['s2_reprojected_dir']) / gt_file_path.stem).glob('*.tif'):
         with rasterio.open(img_path) as fh:

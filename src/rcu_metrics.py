@@ -518,7 +518,7 @@ class StratifiedRCU:
         return results
 
     def get_subset(self, project_ids: Optional[List[str]]=None, metric_names: Optional[List[str]]=None):
-        """eg rcu.get_multi(EAST, ["mse", "uce"])"""
+        """eg rcu.get_subset(EAST, ["mse", "uce"])"""
         assert project_ids is None or isinstance(project_ids, list)
         assert metric_names is None or isinstance(metric_names, list)
         # get indexes and metrics
@@ -529,3 +529,6 @@ class StratifiedRCU:
         for metric in metrics:
             results.append(metric.get_subset(self.histogram, indexes))
         return results
+
+    def get_all(self,  metric_names: Optional[List[str]]=None):
+        return self.get_subset(metric_names)

@@ -489,14 +489,7 @@ class ProjectsPreprocessor:
             }, fh)
         print(f"Done pickling project {project_id}")
         return path
-
-    # def plot(self, project_id, ax=None):
-    #     rasterfile = rasterio.open(pjoin(self.save_dir, f"info_map_{project_id}.tif"))
-    #     imap = rasterfile.read(1).astype(np.float16)
-    #     imap[imap<0] = np.nan
-    #     if ax: ax.imshow(imap, cmap=matplotlib.colors.ListedColormap(["black", "white", "yellow", "blue", "red"])); return ax
-    #     else: plt.imshow(imap, cmap=matplotlib.colors.ListedColormap(["black", "white", "yellow", "blue", "red"]))
-
+    
 def configure(cfg_f, num_projects_per_job):
     """
     Given a blowtorch configuration and a number of jobs, configure each jobs (i.e generate job configurations
