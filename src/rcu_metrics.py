@@ -1,18 +1,28 @@
 import numpy as np
 import inspect
 import scipy.stats
+from itertools import chain
 from typing import *
 
 # Utils
 def weighted_avg(values, counts, axis):
     return np.nansum(values*counts, axis=axis)/np.nansum(counts, axis=axis)
 
-def reduce_binned(self, binned, reduce_fn=lambda x:np.nanmean(x, axis=0)):
+def apply_binned(binned, fn, *args):
+    num_variables, num_bins = len(binned), len(binned[0])
+    result = [[[] for _ in range(num_bins)] for _ in range(num_variables)]
+    for i in range(num_variables):
+        for j in range(num_bins):
+            for k in range(len(binned[i][j])):
+                result[i][j].append(fn(binned[i][j][k], *args)) # apply fn to binned[i][j][k]
+    return result
+
+def reduce_binned(binned, reduce_fn, *args):
     num_variables, num_bins = len(binned), len(binned[0])
     result = np.full((num_variables, num_bins), np.nan)
     for i in range(num_variables):
         for j in range(num_bins):
-            result[i,j] = reduce_fn(binned[i][j])
+            result[i,j] = reduce_fn(binned[i][j], *args) # reduce list binned[i][j] into single value
     return result
 
 # stratified tensor parent
@@ -126,7 +136,7 @@ class StratifiedHistogram(StratifiedTensor):
                 for j, other in enumerate(others): 
                     binned_others[j][i][bin_id] = others[j][i,variable_mask]
         # compute mean values
-        mean_values = self.reduce_binned(binned_values)
+        mean_values = self.reduce_binned(binned_values, reduce_fn=lambda x: np.nanmean(x, axis=0))
         return mean_values, binned_values, binned_others
 
 # metrics Parent
@@ -213,10 +223,8 @@ class StratifiedMeanErrorMetric(StratifiedMetric):
         return self.nanmean(self.fn(diff), axis=0)
     def agg(self, histogram, arr=None, keepbins=False):
         if arr is None: arr = self.X
-        if keepbins:
-            return weighted_avg(arr, histogram, axis=(1,2))
-        else:
-            return weighted_avg(arr, histogram, axis=1)
+        axes = 1 if keepbins else (1,2)
+        return weighted_avg(arr, histogram, axis=axes)
     
 # regression metrics
 class StratifiedMSE(StratifiedMeanErrorMetric): 
@@ -247,10 +255,8 @@ class StratifiedNLL(StratifiedMetric):
         return np.nanmean(0.5 * (np.log(variance) + (diff**2)/variance), axis=0)
     def agg(self, histogram, arr=None, keepbins=False):
         if arr is None: arr = self.X
-        if keepbins:
-            return weighted_avg(arr, histogram, axis=(1,2))
-        else:
-            return weighted_avg(arr, histogram, axis=1)
+        axes = 1 if keepbins else (1,2)
+        return weighted_avg(arr, histogram, axis=axes)
 
 # calibration metrics
 class StratifiedUCE(DualStratifiedMetric):
@@ -258,11 +264,11 @@ class StratifiedUCE(DualStratifiedMetric):
     X1: mean_variance, X2: mean_mse
     """
     def evaluate_binned(self, binned_diff, binned_variance):
-        mean_variance = reduce_binned(binned_variance, reduce_fn=lambda x: np.nanmean(x, axis=self.variables_axis))
-        mean_mse = reduce_binned(binned_diff, reduce_fn=lambda x: np.nanmean(x**2, axis=self.variables_axis))
-        return self.evaluate(mean_variance, mean_mse)
-    def evaluate(self, mean_mse, mean_variance):
-        return mean_variance, mean_mse
+        return reduce_binned(binned_variance, self.evaluate, "variance"), reduce_binned(binned_diff, self.evaluate, "diff")
+    def evaluate(self, values, variable):
+        if variable=="variance": return np.nanmean(values, axis=0)
+        elif variable=="diff": return np.nanmean(values**2, axis=0)
+        else: raise AttributeError(f"`variable` must be in ['variance', 'diff']. got '{variable}'")
     def agg(self, histogram, arr1=None, arr2=None, keepbins=False):
         if arr1 is None: arr1 = self.X1
         if arr2 is None: arr2 = self.X2
@@ -281,8 +287,8 @@ class StratifiedENCE(StratifiedUCE):
     """
     X1: mean_variance, X2: mean_mse
     """
-    def evaluate(self, mean_mse, mean_variance):
-        return np.sqrt(mean_variance), np.sqrt(mean_mse)
+    def evaluate(self, *args, **kwargs):
+        return np.sqrt(super().evaluate(*args, **kwargs))
     def agg(self, histogram, arr1=None, arr2=None, keepbins=False):
         if arr1 is None: arr1 = self.X1
         if arr2 is None: arr2 = self.X2
@@ -325,8 +331,8 @@ class StratifiedCIAccuracy(StratifiedMetric):
         return x
     def agg(self, histogram, arr=None, keepbins=False):
         if arr is None: arr = self.X
-        if keepbins: return weighted_avg(arr, histogram, axis=self.groups_axis) #(d,M,R)
-        else: return weighted_avg(arr, histogram, axis=(self.groups_axis, self.bins_axis)) #(d,R)
+        axes = 1 if keepbins else (1,2)
+        return weighted_avg(arr, histogram, axis=axes)
 
 class StratifiedAUCE(StratifiedMetric):
     def __init__(self, lo_rho, hi_rho, num_rhos, *args, **kwargs):
@@ -359,9 +365,50 @@ class StratifiedAUCE(StratifiedMetric):
         else: return np.nansum((error[:,1:]+error[:,:-1]), axis=1)/(2*self.ci_accs.num_rhos)
 
 # Usefulness metrics
-class StratifiedCv(StratifiedMetric): pass
-class StratifiedSRP(StratifiedMetric): pass 
-
+class StratifiedCv(StratifiedMetric): 
+    """
+    X1: mean_std(bin)=mean_std, X2: C_v(bin)*mean_std(dataset)=var_std
+    """
+    def evaluate_binned(self, binned_variance):
+        # to std
+        binned_std = apply_binned(binned_variance, fn=lambda x: np.sqrt(x))
+        # compute mean std
+        mean_std = reduce_binned(binned_std, self.evaluate, "mean_std") #(d,M)
+        # unbias std: not so elegant sorry
+        binned_std = [
+            [
+                list(np.array(binned_std[i][j])-mean_std[i][j])
+                for j in range(self.num_bins)
+            ] 
+            for i in range(self.num_variable)
+        ]
+        # compute std variance in each bin/variable
+        var_std = reduce_binned(binned_std, self.evaluate, "var_std") #(d,M)
+        return mean_std, var_std
+    def evaluate(self, values, variable):
+        if variable=="mean_std": return np.nanmean(values, axis=0)
+        elif variable=="var_std": 
+            return np.sqrt(np.nansum(values, axis=0)/(values.shape[0]-1))
+        else: raise AttributeError(f"`variable` must be in ['mean_std', 'var_std']. got '{variable}'")
+    def agg(self, histogram, arr1=None, arr2=None, keepbins=False):
+        if arr1 is None: arr1 = self.X1
+        if arr2 is None: arr2 = self.X2
+        mu = weighted_avg(arr1, histogram, axis=1) if keepbins else weighted_avg(arr1, histogram, axis=(1,2))
+        result = (histogram-1)*self.arr2
+        axes = 1 if keepbins else (1,2)
+        result = np.sqrt(np.nansum(result, axis=axes)/(np.nansum(histogram, axis=axes)-1))/mu
+        return result
+    
+class StratifiedSRP(StratifiedMetric):
+    def evaluate_binned(self, binned_variance):
+        return reduce_binned(binned_variance, reduce_fn=self.evaluate)
+    def evaluate(self, variance):
+        return self.nanmean(self.fn(variance), axis=0)
+    def agg(self, histogram, arr=None, keepbins=False):
+        if arr is None: arr = self.X
+        axes = 1 if keepbins else (1,2)
+        return weighted_avg(arr, histogram, axis=axes)
+    
 class StratifiedRCU:
     def __init__(
         self,
@@ -482,18 +529,3 @@ class StratifiedRCU:
         for metric in metrics:
             results.append(metric.get_subset(self.histogram, indexes))
         return results
-    
-def main():
-    """
-    - load standardization data
-    - loop on projects, compute variance bounds online
-    - init rcu
-    - loop on projects
-        - standardize
-        - add project
-        - get([project_id])
-    - loop on regions
-        - get(region)
-    - save results (incl. histogram)
-    """
-    pass

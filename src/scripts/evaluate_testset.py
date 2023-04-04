@@ -28,3 +28,18 @@ ALL = EAST + WEST + NORTH
 # Aggregate projects
 
 # Save meetrics
+
+def main():
+    """
+    - load standardization data
+    - loop on projects, compute variance bounds online
+    - init rcu
+    - loop on projects
+        - standardize
+        - add project
+        - get([project_id])
+    - loop on regions
+        - get(region)
+    - save results (incl. histogram)
+    """
+    pass
