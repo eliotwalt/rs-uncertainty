@@ -290,6 +290,8 @@ class ProjectsPreprocessor:
         images,
         image_ids,
         labels,
+        gt_date,
+        testset_max_months_delta,
     ): 
         """
         
@@ -312,6 +314,7 @@ class ProjectsPreprocessor:
                 is_in_polygon = (rasterized_polygon[i_slice, j_slice] == 1).all()
                 # Ignore pixels that span over multiple splits and lie completly in their polygon
                 if is_same_split and is_in_polygon and valid_mask[i,j]:
+                    dataset = self.split_map[int(split_mask[i,j])]
                     images_for_pixel: List[Tuple[np.ndarray, List[np.ndarray], List[np.ndarray]]] = []
                     s2_dates_used = set()
                     # filter out s1 images which contain a nodata pixel in the patch, i.e. images which do
@@ -323,6 +326,10 @@ class ProjectsPreprocessor:
                     if len(valid_ascending) == 0 or len(valid_descending) == 0:
                         continue
                     for s2_image, s2_date in s2_images:
+                        # do not add TEST images if the difference between s2_date and gt_date is greater than 
+                        # the threshold `testset_max_months_delta`
+                        if dataset == "test" and abs((gt_date-s2_date).months > testset_max_months_delta):
+                            continue
                         # do not add image if an image of the same date has been added for this location before.
                         # this is the case e.g. for the overlap region between two adjacent S2 images, which is
                         # identical for both images and would result in duplicate data points.
@@ -365,7 +372,6 @@ class ProjectsPreprocessor:
                                 + [self.separator]
                             )
                         # add sample stats to corresponding split
-                        dataset = self.split_map[int(split_mask[i,j])]
                         locations[dataset].append((i, j))
                         offsets[dataset].append(len(loc_to_images_map[dataset]))
                         loc_to_images_map[dataset].extend(this_loc_to_images_map)

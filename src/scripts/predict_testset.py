@@ -5,7 +5,7 @@ from typing import List, Tuple
 from pathlib import Path
 from datetime import datetime
 from itertools import chain
-
+import argparse
 import torch
 import numpy as np
 import fiona
@@ -24,10 +24,17 @@ SEPARATOR = 65535
 def parse_date(date_str) -> datetime:
     return datetime.strptime(date_str, '%Y%m%d')
 
-run = Run(config_files=['config/predict_testset-dev.yaml'])
+def parse_args():
+    p = argparse.ArgumentParser()
+    p.add_argument("--cfg", help="Path to prediction config file", required=True, type=_path)
+    return p.parse_args()
+
+args = parse_args()
+
+run = Run(config_files=[args.cfg])
 run.seed_all(12345)
 
-save_dir = Path('results/dev/') / (datetime.now().strftime('%Y-%m-%d_%H-%M-%S') + (f'_{run["name"]}' if run['name'] else ''))
+save_dir = Path(run["save_dir"]) / (datetime.now().strftime('%Y-%m-%d_%H-%M-%S') + (f'_{run["name"]}' if run['name'] else ''))
 save_dir.mkdir(parents=True)
 
 assert run['patch_size'] % 2 == 1, 'Patch size should be odd.'
