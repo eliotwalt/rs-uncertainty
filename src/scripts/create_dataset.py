@@ -639,7 +639,7 @@ def aggregate(cfg_f):
                 s2_cstats.add(sub_stats[p]["s2_stats"])
                 s1_cstats.add(sub_stats[p]["s1_stats"])
                 labels_cstats.add(sub_stats[p]["labels_stats"])
-            # DEBUG: shutil.rmtree(subdir)
+            shutil.rmtree(subdir)
             print("Done.")
     stats.update({
         "s2_stats": s2_cstats.to_dict(),
