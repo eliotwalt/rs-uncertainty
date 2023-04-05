@@ -30,7 +30,10 @@ def _path(x):
 def pjoin(*subs): return Path(os.path.abspath(os.path.join(*subs)))
 
 def parse_date(date_str) -> datetime: return datetime.strptime(date_str, '%Y%m%d')
-def parse_gt_date(date_str) -> datetime: return datetime.strptime(date_str, "%Y-%m-%d")
+def parse_gt_date(date_str) -> datetime: 
+    # there are 2 gt date formats
+    try: return datetime.strptime(date_str, "%Y-%m-%d")
+    except: return datetime.strptime(date_str, "%Y/%m/%d")
 
 def pjoin(*subs: List[Union[str,Path]]) -> Path: return Path(os.path.join(*subs))
 
