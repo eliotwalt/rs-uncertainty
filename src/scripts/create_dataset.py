@@ -150,6 +150,8 @@ class ProjectsPreprocessor:
             images,
             image_ids,
             labels,
+            gt_date,
+            self.run["testset_max_months_delta"]
         )
         # copy stats
         for k, v in patches_stats.items():
@@ -327,8 +329,8 @@ class ProjectsPreprocessor:
                         continue
                     for s2_image, s2_date in s2_images:
                         # do not add TEST images if the difference between s2_date and gt_date is greater than 
-                        # the threshold `testset_max_months_delta`
-                        if dataset == "test" and abs((gt_date-s2_date).months > testset_max_months_delta):
+                        # the threshold `testset_max_months_delta` (if specified)
+                        if dataset == "test" and testset_max_months_delta is not None and abs((gt_date-s2_date).months > testset_max_months_delta):
                             continue
                         # do not add image if an image of the same date has been added for this location before.
                         # this is the case e.g. for the overlap region between two adjacent S2 images, which is
