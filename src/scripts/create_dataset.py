@@ -611,17 +611,17 @@ def aggregate(cfg_f):
     s1_cstats = CombinedStats((2,))
     labels_cstats = CombinedStats((5,))
     print("Starting projects aggregation.")
-    for subdir in save_dir.iterdir():
+    for subdir in tqdm(list(save_dir.iterdir())):
         if os.path.isdir(subdir):
             print(f"Aggregating: {subdir.name}")
             # 1. copy pkl files
             print("Copying pkl files ...")
-            for pkl_file in tqdm(subdir.glob("*.pkl")):
+            for pkl_file in subdir.glob("*.pkl"):
                 dst = pjoin(save_dir, pkl_file.name)
                 shutil.copyfile(pkl_file, dst)
             # 2. copy tif files
             print("Copying tif files ...")
-            for tif_file in tqdm(subdir.glob("*.tif")):
+            for tif_file in subdir.glob("*.tif"):
                 dst = pjoin(save_dir, tif_file.name)
                 shutil.copyfile(tif_file, dst)
             # 3. combine stats
@@ -639,7 +639,7 @@ def aggregate(cfg_f):
                 s2_cstats.add(sub_stats[p]["s2_stats"])
                 s1_cstats.add(sub_stats[p]["s1_stats"])
                 labels_cstats.add(sub_stats[p]["labels_stats"])
-            shutil.rmtree(subdir)
+            # DEBUG: shutil.rmtree(subdir)
             print("Done.")
     stats.update({
         "s2_stats": s2_cstats.to_dict(),

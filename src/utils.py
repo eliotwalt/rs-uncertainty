@@ -103,7 +103,7 @@ class CombinedStats(RunningStats):
     def add(self, data):
         assert isinstance(data, dict)
         # float64 arrays
-        new_num_seen = np.array(data["num_seen"], dtype=np.float64)
+        new_num_seen = data["num_seen"]
         new_mean = np.array(data["mean"], dtype=np.float64)
         new_mean_of_squared = np.array(data["mean_of_squared"], dtype=np.float64)
         # update

@@ -12,8 +12,8 @@ patch_size: 15
 margin: 3  # should be less than 7 to not overlap with train/val stripes
 cloud_prob_threshold: 10
 cloudy_pixels_threshold: 0.1
-# pkl_dir: 'data/2023-04-05_14-47-18'
-pkl_dir: 'assets/data/pkl/2021-05-18_10-57-45'
+pkl_dir: 'data/2023-04-05_16-09-50'
+# pkl_dir: 'assets/data/pkl/2021-05-18_10-57-45'
 save_dir: 'results'
 name: null
 checkpoint_dirs:
