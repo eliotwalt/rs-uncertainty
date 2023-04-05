@@ -85,3 +85,28 @@ class RunningStats:
     @property
     def std(self):
         return np.sqrt(self.variance)
+
+    def to_dict(self):
+        return {
+            "num_seen": self.num_seen,
+            "mean": self.mean,
+            "mean_of_squared": self.mean_of_squared,
+            "variance": self.variance,
+            "std": self.std
+        }
+    
+class CombinedStats(RunningStats):
+    """Combine multiple RunningStats"""
+    def __init__(self, shape):
+        super().__init__(shape)
+    
+    def add(self, data):
+        assert isinstance(data, dict)
+        # float64 arrays
+        new_num_seen = np.array(data["num_seen"], dtype=np.float64)
+        new_mean = np.array(data["mean"], dtype=np.float64)
+        new_mean_of_squared = np.array(data["mean_of_squared"], dtype=np.float64)
+        # update
+        self.mean = (self.num_seen*self.mean+new_num_seen*new_mean)/(self.num_seen+new_num_seen)
+        self.mean_of_squared = (self.num_seen*self.mean_of_squared+new_num_seen*new_mean_of_squared)/(self.num_seen+new_num_seen)
+        self.num_seen += new_num_seen

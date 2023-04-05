@@ -1,0 +1,7 @@
+datasets: # created datasets
+  albecker_stable: 'assets/data/pkl/2021-05-18_10-57-45'
+  baseline_365days: 'data/2023-04-05_11-26-15'
+
+results: # predictions and evaluation
+  baseline_365days: ''
+

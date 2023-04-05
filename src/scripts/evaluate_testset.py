@@ -42,10 +42,10 @@ def main():
         cfg = yaml.safe_load(f)
     projects = cfg["projects_east"]+cfg["projects_west"]+cfg["projects_north"]
     # Load standardization data
-    with pjoin(args.cfg["pkl_dir"], "stats.yaml").open("r", encoding="utf-8") as f:
+    with pjoin(cfg["pkl_dir"], "stats.yaml").open("r", encoding="utf-8") as f:
         stats = yaml.safe_load(f)
-    labels_mean = np.array(stats["labels_mean"])
-    labels_std = np.array(stats["labels_std"])
+    labels_mean = np.array(stats["labels_stats"]["mean"])
+    labels_std = np.array(stats["labels_stats"]["std"])
     # loop on projects to get variance bounds
     print(f"Computing variance bounds in {cfg['pkl_dir']}...")
     lo_variance = np.full((5,), np.inf)

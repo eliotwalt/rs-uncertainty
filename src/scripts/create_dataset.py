@@ -19,6 +19,10 @@ import rasterio.features
 import matplotlib
 import matplotlib.pyplot as plt
 from time import time
+import sys, os 
+root = os.path.dirname(os.path.dirname(__file__))
+sys.path.insert(0, root)
+from utils import split_list, RunningStats, CombinedStats
 
 SEPARATOR = 65535
 
@@ -392,7 +396,7 @@ class ProjectsPreprocessor:
         stats["num_val"] = len(locations['val'])
         stats["num_test"] = len(locations['test'])
         # save pkl
-        _ = self._save_project_patches(
+        project_data, _ = self._save_project_patches(
             project_id,
             images,
             locations,
@@ -400,15 +404,55 @@ class ProjectsPreprocessor:
             offsets,
             labels,
         )
-        # self._make_dataset_info(
-        #     project_id,
-        #     gt_file,
-        #     locations,
-        #     split_mask,
-        #     valid_mask,
-        #     rasterized_polygon
-        # )
+        stats = self._compute_project_stats(
+            project_id,
+            stats,
+            project_data,
+        )
         self._save_image_density(gt_file, project_id, num_images_per_pixel)
+        return stats
+    
+    def _compute_project_stats(
+        self,
+        project_id,
+        stats,
+        data
+    ):
+        patch_size = self.run["patch_size"]
+        s2_stats = RunningStats((12,))
+        s1_stats = RunningStats((2,))
+        labels_stats = RunningStats((5,))
+        print(f"Computing project {project_id} stats...")
+        locations = data['train'][0]
+        loc_to_images_map = data['train'][1]
+        offsets = data['train'][2]
+        images = data['images']
+        labels = data['labels']
+        for index in trange(len(locations)):
+            i, j = locations[index]
+            patch_half = patch_size // 2
+            i_slice = slice(i - patch_half, i + patch_half + 1)
+            j_slice = slice(j - patch_half, j + patch_half + 1)
+            # extract the part from loc_to_images_map that contains the valid s2 and s1 indices for this location
+            upper = None if index == len(locations) - 1 else offsets[index + 1]
+            _map = loc_to_images_map[offsets[index]:upper]
+            assert _map[0] != SEPARATOR and _map[-1] == SEPARATOR, f"{i}, {j}"
+            _map = np.array(split_list(_map.tolist(), SEPARATOR), dtype='object')
+            assert len(_map) % 3 == 0
+            for s2_indices, s1_a_indices, s1_d_indices in np.array_split(_map, len(_map) // 3):
+                assert len(s2_indices) == 1
+                s2_index = s2_indices[0]
+                s2_stats.add(images[s2_index][:12, i_slice, j_slice].reshape(-1, patch_size**2).transpose())
+                for s1_index in chain(s1_a_indices, s1_d_indices):
+                    s1_stats.add(images[s1_index][:, i_slice, j_slice].reshape(-1, patch_size**2).transpose())
+            labels_patch = labels[:, i_slice, j_slice]
+            labels_stats.add(labels_patch[:, ~np.isnan(labels_patch).any(0)].transpose())
+        # update stats
+        stats.update({
+            "s2_stats": s2_stats.to_dict(),
+            "s1_stats": s1_stats.to_dict(),
+            "labels_stats": labels_stats.to_dict(),
+        })
         return stats
     
     def _save_image_density(self, gt_file, project_id, num_images_per_pixel):
@@ -480,28 +524,29 @@ class ProjectsPreprocessor:
         ):
         path = pjoin(self.save_dir, f"{project_id}.pkl")
         print(f"Pickling project {project_id}: {str(path)}")
+        data = {
+            'images': images,
+            'train': (
+                np.array(locations['train'], dtype=np.uint16),
+                np.array(loc_to_images_map['train'], dtype=np.uint16),
+                np.array(offsets['train'], dtype=np.uint64)
+            ),
+            'val': (
+                np.array(locations['val'], dtype=np.uint16),
+                np.array(loc_to_images_map['val'], dtype=np.uint16),
+                np.array(offsets['val'], dtype=np.uint64)
+            ),
+            'test': (
+                np.array(locations['test'], dtype=np.uint16),
+                np.array(loc_to_images_map['test'], dtype=np.uint16),
+                np.array(offsets['test'], dtype=np.uint64)
+            ),
+            'labels': labels
+        }
         with path.open("wb") as fh:
-            pickle.dump({
-                'images': images,
-                'train': (
-                    np.array(locations['train'], dtype=np.uint16),
-                    np.array(loc_to_images_map['train'], dtype=np.uint16),
-                    np.array(offsets['train'], dtype=np.uint64)
-                ),
-                'val': (
-                    np.array(locations['val'], dtype=np.uint16),
-                    np.array(loc_to_images_map['val'], dtype=np.uint16),
-                    np.array(offsets['val'], dtype=np.uint64)
-                ),
-                'test': (
-                    np.array(locations['test'], dtype=np.uint16),
-                    np.array(loc_to_images_map['test'], dtype=np.uint16),
-                    np.array(offsets['test'], dtype=np.uint64)
-                ),
-                'labels': labels
-            }, fh)
+            pickle.dump(data, fh)
         print(f"Done pickling project {project_id}")
-        return path
+        return data, path
     
 def configure(cfg_f, num_projects_per_job):
     """
@@ -562,6 +607,9 @@ def aggregate(cfg_f):
     # iterate over sub_directories
     stats = {"num_train": 0, "num_val": 0, "num_test": 0}
     accum_keys = list(stats.keys()).copy()
+    s2_cstats = CombinedStats((12,))
+    s1_cstats = CombinedStats((2,))
+    labels_cstats = CombinedStats((5,))
     print("Starting projects aggregation.")
     for subdir in save_dir.iterdir():
         if os.path.isdir(subdir):
@@ -587,50 +635,58 @@ def aggregate(cfg_f):
                 ## 3.2. update accumulators
                 for key in accum_keys:
                     stats[key] += sub_stats[p][key]
-            # 4. delete
+                ## 3.3. update moments
+                s2_cstats.add(sub_stats["s2_stats"])
+                s1_cstats.add(sub_stats["s1_stats"])
+                labels_cstats.add(sub_stats["labels_stats"])
             shutil.rmtree(subdir)
             print("Done.")
-    # Compute variables statistics
-    print("Computing variables statistics ...")
-    patch_size = cfg["patch_size"]
-    s2_stats = RunningStats((12,))
-    s1_stats = RunningStats((2,))
-    labels_stats = RunningStats((5,))
-    for pkl_file in save_dir.glob("*.pkl"):
-        print(f"Processing {pkl_file.stem} ...")
-        with pkl_file.open("rb") as fh: data = pickle.load(fh)
-        # select data
-        locations = data['train'][0]
-        loc_to_images_map = data['train'][1]
-        offsets = data['train'][2]
-        images = data['images']
-        labels = data['labels']
-        for index in trange(len(locations)):
-            i, j = locations[index]
-            patch_half = patch_size // 2
-            i_slice = slice(i - patch_half, i + patch_half + 1)
-            j_slice = slice(j - patch_half, j + patch_half + 1)
-            # extract the part from loc_to_images_map that contains the valid s2 and s1 indices for this location
-            upper = None if index == len(locations) - 1 else offsets[index + 1]
-            _map = loc_to_images_map[offsets[index]:upper]
-            assert _map[0] != SEPARATOR and _map[-1] == SEPARATOR, f"{i}, {j}"
-            _map = np.array(split_list(_map.tolist(), SEPARATOR), dtype='object')
-            assert len(_map) % 3 == 0
-            for s2_indices, s1_a_indices, s1_d_indices in np.array_split(_map, len(_map) // 3):
-                assert len(s2_indices) == 1
-                s2_index = s2_indices[0]
-                s2_stats.add(images[s2_index][:12, i_slice, j_slice].reshape(-1, patch_size**2).transpose())
-                for s1_index in chain(s1_a_indices, s1_d_indices):
-                    s1_stats.add(images[s1_index][:, i_slice, j_slice].reshape(-1, patch_size**2).transpose())
-            labels_patch = labels[:, i_slice, j_slice]
-            labels_stats.add(labels_patch[:, ~np.isnan(labels_patch).any(0)].transpose())
-    # update stats
     stats.update({
-        's2_mean': s2_stats.mean.tolist(), 's2_std': s2_stats.std.tolist(),
-        's1_mean': s1_stats.mean.tolist(), 's1_std': s1_stats.std.tolist(),
-        'labels_mean': labels_stats.mean.tolist(), 'labels_std': labels_stats.std.tolist()
+        "s2_stats": s2_cstats.to_dict(),
+        "s1_stats": s1_cstats.to_dict(),
+        "labels_stats": labels_cstats.to_dict(),
     })
-    print("Done.")  
+    # # Compute variables statistics
+    # print("Computing variables statistics ...")
+    # patch_size = cfg["patch_size"]
+    # s2_stats = RunningStats((12,))
+    # s1_stats = RunningStats((2,))
+    # labels_stats = RunningStats((5,))
+    # for pkl_file in save_dir.glob("*.pkl"):
+    #     print(f"Processing {pkl_file.stem} ...")
+    #     with pkl_file.open("rb") as fh: data = pickle.load(fh)
+    #     # select data
+    #     locations = data['train'][0]
+    #     loc_to_images_map = data['train'][1]
+    #     offsets = data['train'][2]
+    #     images = data['images']
+    #     labels = data['labels']
+    #     for index in trange(len(locations)):
+    #         i, j = locations[index]
+    #         patch_half = patch_size // 2
+    #         i_slice = slice(i - patch_half, i + patch_half + 1)
+    #         j_slice = slice(j - patch_half, j + patch_half + 1)
+    #         # extract the part from loc_to_images_map that contains the valid s2 and s1 indices for this location
+    #         upper = None if index == len(locations) - 1 else offsets[index + 1]
+    #         _map = loc_to_images_map[offsets[index]:upper]
+    #         assert _map[0] != SEPARATOR and _map[-1] == SEPARATOR, f"{i}, {j}"
+    #         _map = np.array(split_list(_map.tolist(), SEPARATOR), dtype='object')
+    #         assert len(_map) % 3 == 0
+    #         for s2_indices, s1_a_indices, s1_d_indices in np.array_split(_map, len(_map) // 3):
+    #             assert len(s2_indices) == 1
+    #             s2_index = s2_indices[0]
+    #             s2_stats.add(images[s2_index][:12, i_slice, j_slice].reshape(-1, patch_size**2).transpose())
+    #             for s1_index in chain(s1_a_indices, s1_d_indices):
+    #                 s1_stats.add(images[s1_index][:, i_slice, j_slice].reshape(-1, patch_size**2).transpose())
+    #         labels_patch = labels[:, i_slice, j_slice]
+    #         labels_stats.add(labels_patch[:, ~np.isnan(labels_patch).any(0)].transpose())
+    # # update stats
+    # stats.update({
+    #     's2_mean': s2_stats.mean.tolist(), 's2_std': s2_stats.std.tolist(),
+    #     's1_mean': s1_stats.mean.tolist(), 's1_std': s1_stats.std.tolist(),
+    #     'labels_mean': labels_stats.mean.tolist(), 'labels_std': labels_stats.std.tolist()
+    # })
+    # print("Done.")  
     # write updated stats
     print("Writing aggregated stats ...")
     with pjoin(save_dir, "stats.yaml").open("w", encoding="utf-8") as f:

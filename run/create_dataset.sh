@@ -133,12 +133,12 @@ then
   log_file=$log_dir/agg.log
   echo "Job name       : $job_name"
   echo "Log file       : $log_file"
-  options="-n 1 --mem-per-cpu=12000 --time=30:00 --depend=afterok:$pp_job_array_id --job-name=$job_name --output=$log_file --error=$log_file"
+  options="-n 1 --mem-per-cpu=32000 --time=4:00:00 --depend=afterok:$pp_job_array_id --job-name=$job_name --output=$log_file --error=$log_file"
   echo "Options        : $options"
   # create log dir/file
   mkdir -p $(dirname $log_file)
   touch $log_file
-  retvalue=($(sbatch $options /cluster/work/igp_psr/elwalt/pdm/rs-uncertainty/run/slurm/aggregate_projects.sh $CFG $pp_job_array_id))
+  retvalue=($(sbatch $options /cluster/work/igp_psr/elwalt/pdm/rs-uncertainty/run/slurm/aggregate_projects.sh $CFG))
   echo "${retvalue[@]}"
   agg_job_id=${retvalue[-1]}
   echo "Done."
