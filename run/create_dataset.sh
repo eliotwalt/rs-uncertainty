@@ -84,7 +84,7 @@ then
   echo "Computing job array options ...."
   num_jobs=${#sub_cfgs[@]}
   timestamp=$(basename $(dirname $(dirname ${sub_cfgs[0]})))
-  time=$(python -c "from datetime import timedelta; dt=timedelta(hours=12); print(dt/$num_jobs)")
+  time=$(python -c "from datetime import timedelta; td=timedelta(hours=2)*$NUM_PROJECTS_PER_JOB; hours, minutes = td.seconds//3600, (td.seconds//60)%60; print(f'{hours:0>2}:{minutes:0>2}:00')")
   log_dir=/cluster/work/igp_psr/elwalt/logs/dataset/$timestamp
   job_name="preprocess_projects"
   log_file=$log_dir/pp_%a-$num_jobs.log
@@ -92,7 +92,7 @@ then
   echo "number of jobs : $num_jobs"
   echo "Log file       : $log_file"
   echo "Compute time   : $time"
-  options="-n 1 --mem-per-cpu=64000 --job-name=$job_name --array=1-$num_jobs --output=$log_file --error=$log_file"
+  options="-n 1 --time $time --mem-per-cpu=64000 --job-name=$job_name --array=1-$num_jobs --output=$log_file --error=$log_file"
   echo "Options        : $options"
   # create log dir/file
   mkdir -p $log_dir

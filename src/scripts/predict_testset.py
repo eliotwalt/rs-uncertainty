@@ -53,10 +53,14 @@ with (Path(run['pkl_dir']) / 'stats.yaml').open() as fh:
 
 s2_channels = (np.array(train_config['data']['s2_image_bands']) - 1).astype('int')
 s1_channels = (np.array(train_config['data']['s1_image_bands']) - 1).astype('int')
-s2_mean = np.array(stats['s2_stats']['mean'])[s2_channels].tolist()
-s2_std = np.array(stats['s2_stats']['std'])[s2_channels].tolist()
-s1_mean = np.array(stats['s1_stats']['mean'])[s1_channels].tolist()
-s1_std = np.array(stats['s1_stats']['std'])[s1_channels].tolist()
+s2_mean = np.array(stats['s2_mean'])[s2_channels].tolist()
+s2_std = np.array(stats['s2_std'])[s2_channels].tolist()
+s1_mean = np.array(stats['s1_mean'])[s1_channels].tolist()
+s1_std = np.array(stats['s1_std'])[s1_channels].tolist()
+# s2_mean = np.array(stats['s2_stats']['mean'])[s2_channels].tolist()
+# s2_std = np.array(stats['s2_stats']['std'])[s2_channels].tolist()
+# s1_mean = np.array(stats['s1_stats']['mean'])[s1_channels].tolist()
+# s1_std = np.array(stats['s1_stats']['std'])[s1_channels].tolist()
 s2_transform = Compose([ToTensor(), SelectChannels(s2_channels), Normalize(s2_mean, s2_std)])
 s1_transform = Compose([ToTensor(), SelectChannels(s1_channels), Normalize(s1_mean, s1_std)])
 
