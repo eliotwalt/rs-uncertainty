@@ -636,9 +636,9 @@ def aggregate(cfg_f):
                 for key in accum_keys:
                     stats[key] += sub_stats[p][key]
                 ## 3.3. update moments
-                s2_cstats.add(sub_stats["s2_stats"])
-                s1_cstats.add(sub_stats["s1_stats"])
-                labels_cstats.add(sub_stats["labels_stats"])
+                s2_cstats.add(sub_stats[p]["s2_stats"])
+                s1_cstats.add(sub_stats[p]["s1_stats"])
+                labels_cstats.add(sub_stats[p]["labels_stats"])
             shutil.rmtree(subdir)
             print("Done.")
     stats.update({
