@@ -89,10 +89,10 @@ class RunningStats:
     def to_dict(self):
         return {
             "num_seen": self.num_seen,
-            "mean": self.mean,
-            "mean_of_squared": self.mean_of_squared,
-            "variance": self.variance,
-            "std": self.std
+            "mean": self.mean.tolist(),
+            "mean_of_squared": self.mean_of_squared.tolist(),
+            "variance": self.variance.tolist(),
+            "std": self.std.tolist()
         }
     
 class CombinedStats(RunningStats):
