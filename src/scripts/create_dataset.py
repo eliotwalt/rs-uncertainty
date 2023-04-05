@@ -30,6 +30,7 @@ def _path(x):
 def pjoin(*subs): return Path(os.path.abspath(os.path.join(*subs)))
 
 def parse_date(date_str) -> datetime: return datetime.strptime(date_str, '%Y%m%d')
+def parse_gt_date(date_str) -> datetime: return datetime.strptime(date_str, "%Y-%m-%d")
 
 def pjoin(*subs: List[Union[str,Path]]) -> Path: return Path(os.path.join(*subs))
 
@@ -151,7 +152,7 @@ class ProjectsPreprocessor:
             image_ids,
             labels,
             gt_date,
-            self.run["testset_max_months_delta"]
+            self.run["testset_max_days_delta"]
         )
         # copy stats
         for k, v in patches_stats.items():
@@ -224,6 +225,7 @@ class ProjectsPreprocessor:
                 polygon = [s['geometry'] for s in collection if s['properties']['kv_id'] == int(project_id)][0]
                 crs = collection.crs
                 gt_date = [s["properties"]["PUB_DATO"] for s in collection if s['properties']['kv_id'] == int(project_id)][0]
+                gt_date = parse_gt_date(gt_date)
                 break
             except IndexError: pass 
         if polygon is None: print("No polygon found")
@@ -293,7 +295,7 @@ class ProjectsPreprocessor:
         image_ids,
         labels,
         gt_date,
-        testset_max_months_delta,
+        testset_max_days_delta,
     ): 
         """
         
@@ -329,8 +331,8 @@ class ProjectsPreprocessor:
                         continue
                     for s2_image, s2_date in s2_images:
                         # do not add TEST images if the difference between s2_date and gt_date is greater than 
-                        # the threshold `testset_max_months_delta` (if specified)
-                        if dataset == "test" and testset_max_months_delta is not None and abs((gt_date-s2_date).months > testset_max_months_delta):
+                        # the threshold `testset_max_days_delta` (if specified)
+                        if dataset == "test" and testset_max_days_delta is not None and abs((gt_date-s2_date).days > testset_max_days_delta):
                             continue
                         # do not add image if an image of the same date has been added for this location before.
                         # this is the case e.g. for the overlap region between two adjacent S2 images, which is

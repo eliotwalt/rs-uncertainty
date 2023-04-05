@@ -10,6 +10,6 @@ projects: ['346', '342', '9', '341', '354', '415', '418', '416', '426', '429', '
            '909', '819', '896', '528', '527', '477', '542', '537', '792', '471', '769', '988']
 sampling_strategy: 'valid_center'
 patch_size: 15
-testset_max_months_delta: 12 # restrict testset to "cleanest" version, i.e. with diff between images and gt of max x months
+testset_max_days_delta: 365 # restrict testset to "cleanest" version, i.e. with diff between images and gt of max x days
 cloud_prob_threshold: 10
 cloudy_pixels_threshold: 0.1
