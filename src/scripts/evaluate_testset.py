@@ -38,7 +38,7 @@ def main():
     # Load config
     args = parse_args()
     print(f"Loading config file {args.cfg}...")
-    with args.cfg("r", encoding="utf-8") as f:
+    with args.cfg.open("r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
     projects = cfg["projects_east"]+cfg["projects_west"]+cfg["projects_north"]
     # Load standardization data
