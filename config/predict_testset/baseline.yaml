@@ -14,7 +14,7 @@ cloud_prob_threshold: 10
 cloudy_pixels_threshold: 0.1
 pkl_dir: 'data/2023-04-05_18-58-33'
 save_dir: 'results'
-name: baseline
+name: 'baseline'
 checkpoint_dirs:
   - 'assets/train_logs/21-06-03_18-13-47_strict-kingfisher-123'
   - 'assets/train_logs/21-06-03_18-08-21_maroon-trogon-122'
