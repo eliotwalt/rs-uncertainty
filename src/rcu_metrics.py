@@ -37,11 +37,10 @@ class StratifiedTensor:
         """
         (d, P, M, *)
         """
-        self.num_variables = num_variables
-        #self.num_variables, self.num_groups, self.num_bins = num_variables, num_groups, num_bins
-        print("ST init:", self, num_variables, self.num_variables, num_groups, num_bins, dtype)
         self.X = np.nan*np.ones((num_variables, num_groups, num_bins), dtype=dtype)
+        self.num_variables, self.num_groups, self.num_bins = X.shape
         self.variables_axis, self.groups_axis, self.bins_axis = 0, 1, 2
+        print("ST init:", self, num_variables, self.num_variables, num_groups, num_bins, dtype)
     @property
     def array(self): return self.X
     @property
