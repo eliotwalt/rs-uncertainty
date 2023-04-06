@@ -99,6 +99,7 @@ class StratifiedHistogram(StratifiedTensor):
         super().__init__(*args, **kwargs)
         self.lo = lo
         self.hi = hi
+        print(dir(self))
         # linear binning
         self.bins = np.stack([
             np.linspace(self.lo[i], self.hi[i], self.num_bins) 
