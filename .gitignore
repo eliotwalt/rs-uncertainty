@@ -10,6 +10,8 @@ results_dev/
 fake_submit.sh
 *.out
 assets/
+assets
+!*/assets
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
