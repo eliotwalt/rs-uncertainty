@@ -6,6 +6,7 @@ from typing import *
 
 # Utils
 def weighted_avg(values, counts, axis):
+    print("[debug:9]", values.shape, counts.shape, (values*counts).shape, np.nansum(values*counts, axis=axis).shape, np.nansum(counts, axis=axis).shape)
     return np.nansum(values*counts, axis=axis)/np.nansum(counts, axis=axis)
 
 def apply_binned(binned, fn, *args):
@@ -67,10 +68,15 @@ class DualStratifiedTensor:
         self.X1 = np.nan*np.ones((num_variables, num_groups, num_bins), dtype=dtype)
         self.X2 = np.nan*np.ones((num_variables, num_groups, num_bins), dtype=dtype)
         self.variables_axis, self.groups_axis, self.bins_axis = 0, 1, 2
+    def __getitem__(self, sel): return self.X1.__getitem__(sel), self.X2.__getitem__(sel)
     @property
     def array(self): return (self.X1, self.X2)
     @property
-    def dtype(self): return self.X1.dtype        
+    def dtype(self): return self.X1.dtype
+    @property
+    def shape(self): 
+        assert self.X1.shape==self.X2.shape     
+        return self.X2.shape
     def add(self, index: int, values1: np.ndarray, values2: np.ndarray):
         """assign along group axis"""
         self.X1[:,index] = values1
@@ -158,10 +164,11 @@ class StratifiedMetric(StratifiedTensor):
         """cumulatively aggregate"""
         if not isinstance(histogram, np.ndarray): histogram = histogram.array
         if arr is None: arr = self.X
-        cumX = np.nan*np.ones((self.num_variables, self.num_bins))
+        cumshape = [self.num_variables, self.num_bins]+list(self.X.shape[3:])
+        cumX = np.nan*np.ones(cumshape)
         cumH = np.nancumsum(histogram, axis=self.groups_axis)
-        for k in range(self.num_bins):
-            cumX[:,k] = self.agg(cumH[:,:,:k], arr[:,:,:k], keepbins=True)
+        for k in range(1,self.num_bins):
+            cumX[:,k] = self.agg(cumH[:,:,:k], arr[:,:,:k], keepbins=False)
         return cumX
     
     def ause(self, histogram, arr=None): 
@@ -179,11 +186,20 @@ class StratifiedMetric(StratifiedTensor):
     
     def get_subset(self, histogram, indexes):
         if not isinstance(histogram, np.ndarray): histogram = histogram.array
-        subX = self.X[indexes,:]
+        subX = self.X[:,indexes,:]
+        histogram = histogram[:,indexes,:]
         return self.get(histogram, subX)
     
 # dual metrics Parent
-class DualStratifiedMetric(DualStratifiedTensor, StratifiedMetric):
+class DualStratifiedMetric(DualStratifiedTensor):
+    def evaluate_binned(self, *args, **kwargs):
+        """compute the metric in each bin and each variables"""
+        raise NotImplementedError()
+
+    def evaluate(self, *args, **kwargs):
+        """actually compute the metric in a given set of variables"""
+        raise NotImplementedError()
+
     def agg(self, histogram, arr=None, axis=None, keepbins=False): 
         """aggregate (d,P,M)->(d,) if not keepbins else (d,P,M)->(d,M)"""
         raise NotImplementedError()
@@ -195,7 +211,7 @@ class DualStratifiedMetric(DualStratifiedTensor, StratifiedMetric):
         cumX = np.nan*np.ones((self.num_variables, self.num_bins))
         cumH = np.nancumsum(histogram, axis=self.groups_axis)
         for k in range(self.num_bins):
-            cumX[:,k] = self.agg_(cumH[:,:,:k], arr1[:,:,:k], arr2[:,:,:k], keepbins=True)
+            cumX[:,k] = self.agg(cumH[:,:,:k], arr1[:,:,:k], arr2[:,:,:k], keepbins=False)
         return cumX
 
     def ause(self, histogram, arr1=None, arr2=None): 
@@ -283,7 +299,7 @@ class StratifiedUCE(DualStratifiedMetric):
         if arr1 is None: arr1 = self.X1
         if arr2 is None: arr2 = self.X2
         N = histogram.sum(axis=(1,2)) if not keepbins else histogram.sum(axis=1)
-        result = self.X1-self.X2
+        result = arr1-arr2
         result = np.abs(np.nansum(result*histogram, axis=self.groups_axis, keepdims=True))
         if keepbins:
             result = result.reshape((self.num_variables,self.num_bins))
@@ -303,10 +319,9 @@ class StratifiedENCE(StratifiedUCE):
         if not isinstance(histogram, np.ndarray): histogram = histogram.array
         if arr1 is None: arr1 = self.X1
         if arr2 is None: arr2 = self.X2
-        if axis is None: axis = self.groups_axis
-        N = histogram.sum(axis=1) if not keepbins else histogram.sum(axis=(1,2))
-        r1 = np.sqrt(np.nansum(histogram*self.X1, axis=self.groups_axis, keepdims=True))
-        r2 = np.sqrt(np.nansum(histogram*self.X2, axis=self.groups_axis, keepdims=True))
+        N = histogram.sum(axis=(1,2)) if not keepbins else histogram.sum(axis=1)
+        r1 = np.sqrt(np.nansum(histogram*arr1, axis=self.groups_axis, keepdims=True))
+        r2 = np.sqrt(np.nansum(histogram*arr2, axis=self.groups_axis, keepdims=True))
         result = r1-r2
         result = np.abs(result) / r1
         if keepbins:
@@ -343,7 +358,9 @@ class StratifiedCIAccuracy(StratifiedMetric):
     def agg(self, histogram, arr=None, keepbins=False):
         if not isinstance(histogram, np.ndarray): histogram = histogram.array
         if arr is None: arr = self.X
+        if len(histogram.shape)<4: histogram = np.expand_dims(histogram, axis=-1)
         axes = 1 if keepbins else (1,2)
+        print("[debug:361]", arr.shape, histogram.shape)
         return weighted_avg(arr, histogram, axis=axes)
 
 class StratifiedAUCE(StratifiedMetric):
@@ -461,6 +478,11 @@ class StratifiedRCU:
         # other attributes
         self.index_map = dict()
         self.counter = 0
+        # Debug
+        print("[Debug:467] Metric tensors shapes?")
+        for mn, m in self.metrics_tensors.items():
+            print(mn, m.shape)
+        # end Debug
 
     @property
     def metrics_tensors(self):
@@ -541,5 +563,6 @@ class StratifiedRCU:
         # compute
         results = []
         for metric in metrics:
+            print("[debug:546]", metric)
             results.append(metric.get_subset(self.histogram, indexes))
         return results

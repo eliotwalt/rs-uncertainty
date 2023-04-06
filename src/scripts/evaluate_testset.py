@@ -52,8 +52,8 @@ def main():
     print(f"Computing variance bounds in {cfg['pkl_dir']}...")
     lo_variance = np.full((5,), np.inf)
     hi_variance = np.full((5,), -np.inf)
-    # for variance_file in tqdm(list(cfg["prediction_dir"].glob("*_variance.tif"))):
     variance_files = []
+    # for variance_file in tqdm(list(cfg["prediction_dir"].glob("*_variance.tif"))):
     for variance_file in tqdm(list(cfg["prediction_dir"].glob("*_variance.tif"))[:3]): # Debug
         if variance_file.stem.split("_")[0] not in projects: continue
         variance_files.append(variance_file)
