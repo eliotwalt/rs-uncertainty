@@ -50,7 +50,7 @@ def main():
     print(f"Computing variance bounds in {cfg['pkl_dir']}...")
     lo_variance = np.full((5,), np.inf)
     hi_variance = np.full((5,), -np.inf)
-    for variance_file in tqdm(cfg["pkl_dir"].glob("*_variance.tif")):
+    for variance_file in tqdm(cfg["prediction_dir"].glob("*_variance.tif")):
         if variance_file.stem.split("_")[0] not in projects: continue
         with rasterio.open(variance_file) as fh:
             variance = fh.read(fh.indexes)
@@ -69,8 +69,8 @@ def main():
         hi_variance=hi_variance
     )
     # compute stats online
-    print(f"Computing stats online from in {cfg['pkl_dir']}...")
-    for mean_file in tqdm(cfg["pkl_dir"].glob('*_mean.tif')):
+    print(f"Computing stats online from in {cfg['prediction_dir']}...")
+    for mean_file in tqdm(cfg["prediction_dir"].glob('*_mean.tif')):
         # load data
         project = mean_file.stem.split('_')[0]
         if project not in projects: continue
