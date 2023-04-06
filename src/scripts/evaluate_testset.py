@@ -46,8 +46,8 @@ def main():
     # Load standardization data
     with pjoin(cfg["pkl_dir"], "stats.yaml").open("r", encoding="utf-8") as f:
         stats = yaml.safe_load(f)
-    labels_mean = np.array(stats["labels_stats"]["mean"])
-    labels_std = np.array(stats["labels_stats"]["std"])
+    labels_mean = np.array(stats["labels_stats"]["mean"]).reshape(5,1,1)
+    labels_std = np.array(stats["labels_stats"]["std"]).reshape(5,1,1)
     # loop on projects to get variance bounds
     print(f"Computing variance bounds in {cfg['pkl_dir']}...")
     lo_variance = np.full((5,), np.inf)
@@ -77,10 +77,10 @@ def main():
         hi_variance=hi_variance
     )
     # compute stats online
-    print(f"Computing stats online from in {cfg['prediction_dir']}...")
+    print(f"Computing stats online from predictions: {cfg['prediction_dir']}...")
     for variance_file in tqdm(variance_files):
         # load data
-        project = mean_file.stem.split('_')[0]
+        project = variance_file.stem.split('_')[0]
         if project not in projects: continue
         with rasterio.open(pjoin(cfg['prediction_dir'], f"{project}_mean.tif")) as fh:
             mean = fh.read(fh.indexes)
@@ -88,6 +88,8 @@ def main():
             variance = fh.read(fh.indexes)
         with rasterio.open(pjoin(cfg['gt_dir'], f"{project}.tif")) as fh:
             gt = fh.read(fh.indexes)
+            gt[2] /= 100
+            gt[4] /= 100
         # standardize
         variance /= (labels_std)**2
         mean = (mean-labels_mean)/labels_std
@@ -95,7 +97,7 @@ def main():
         # add project
         rcu.add_project(project, gt, mean, variance)
         # get project metrics
-        results[project] = rcu.get(project)
+        results[project] = rcu.get_subset([project])
     # compute regions
     # print(f"Aggregegating metrics...")
     # for region in ["east", "west", "north"]:
@@ -103,7 +105,7 @@ def main():
     #     results[region] = rcu.get_subset(region_projects) # Debug
     # compute all
     print(f"Aggregating across all projects...")
-    results["global"] = rcu.get_all()
+    results["global"] = rcu.get()
     # write results
     # res_file = pjoin(cfg["prediction_dir"], "metrics.yaml")
     res_file = Path("ignore.debug-eval.metrics.yaml")

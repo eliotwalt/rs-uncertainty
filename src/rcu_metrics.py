@@ -22,11 +22,12 @@ def reduce_binned(binned, reduce_fn, *args):
     result = np.full((num_variables, num_bins), np.nan)
     for i in range(num_variables):
         for j in range(num_bins):
+            if binned[i][j].shape==(0,): continue
             result[i,j] = reduce_fn(binned[i][j], *args) # reduce list binned[i][j] into single value
     return result
 
 # stratified tensor parent
-class StratifiedTensor:
+class StratifiedTensor():
     def __init__(
         self, 
         num_variables: int, 
@@ -40,13 +41,13 @@ class StratifiedTensor:
         self.X = np.nan*np.ones((num_variables, num_groups, num_bins), dtype=dtype)
         self.num_variables, self.num_groups, self.num_bins = self.X.shape
         self.variables_axis, self.groups_axis, self.bins_axis = 0, 1, 2
+    def __getitem__(self, sel): return self.X.__getitem__(sel)
     @property
     def array(self): return self.X
     @property
     def dtype(self): return self.X.dtype    
-    def __getattribute__(self, attr: str):
-        try: self.X.__getattribute__(attr)
-        except: super().__getattribute__(attr)    
+    @property
+    def shape(self): return self.X.shape
     def add(self, index: int, values: np.ndarray):
         """assign along group axis"""
         self.X[:,index] = values
@@ -69,10 +70,7 @@ class DualStratifiedTensor:
     @property
     def array(self): return (self.X1, self.X2)
     @property
-    def dtype(self): return self.X1.dtype    
-    def __getattribute__(self, attr: str):
-        try: (self.X1.__getattribute__(self, attr), self.X2.__getattribute__(self, attr))
-        except: super().__getattribute__(attr)    
+    def dtype(self): return self.X1.dtype        
     def add(self, index: int, values1: np.ndarray, values2: np.ndarray):
         """assign along group axis"""
         self.X1[:,index] = values1
@@ -136,7 +134,7 @@ class StratifiedHistogram(StratifiedTensor):
                 for j, other in enumerate(others): 
                     binned_others[j][i][bin_id] = others[j][i,variable_mask]
         # compute mean values
-        mean_values = self.reduce_binned(binned_values, reduce_fn=lambda x: np.nanmean(x, axis=0))
+        mean_values = reduce_binned(binned_values, reduce_fn=lambda x: np.nanmean(x, axis=0))
         return mean_values, binned_values, binned_others
 
 # metrics Parent
@@ -158,18 +156,21 @@ class StratifiedMetric(StratifiedTensor):
     
     def cumagg(self, histogram, arr=None):
         """cumulatively aggregate"""
+        if not isinstance(histogram, np.ndarray): histogram = histogram.array
         if arr is None: arr = self.X
         cumX = np.nan*np.ones((self.num_variables, self.num_bins))
-        cumH = np.nancumsum(histogram, axis=self.group_axis)
+        cumH = np.nancumsum(histogram, axis=self.groups_axis)
         for k in range(self.num_bins):
             cumX[:,k] = self.agg(cumH[:,:,:k], arr[:,:,:k], keepbins=True)
         return cumX
     
     def ause(self, histogram, arr=None): 
+        if not isinstance(histogram, np.ndarray): histogram = histogram.array
         cumX = self.cumagg(histogram, arr)
         return np.nansum((cumX[:,1:]+cumX[:,:-1]), axis=self.bins_axis-1)/(2*self.num_bins)
 
     def get(self, histogram, arr=None):
+        if not isinstance(histogram, np.ndarray): histogram = histogram.array
         results = {"values": None, "ause": None}
         if arr is None: arr = self.X
         results["values"] = self.agg(histogram, arr)
@@ -177,29 +178,33 @@ class StratifiedMetric(StratifiedTensor):
         return results
     
     def get_subset(self, histogram, indexes):
+        if not isinstance(histogram, np.ndarray): histogram = histogram.array
         subX = self.X[indexes,:]
         return self.get(histogram, subX)
     
 # dual metrics Parent
-class DualStratifiedMetric(DualStratifiedTensor):
+class DualStratifiedMetric(DualStratifiedTensor, StratifiedMetric):
     def agg(self, histogram, arr=None, axis=None, keepbins=False): 
         """aggregate (d,P,M)->(d,) if not keepbins else (d,P,M)->(d,M)"""
         raise NotImplementedError()
     
     def cumagg(self, histogram, arr1, arr2, cumaxis=None, aggaxis=None):
+        if not isinstance(histogram, np.ndarray): histogram = histogram.array
         if arr1 is None: arr1 = self.X1
         if arr2 is None: arr2 = self.X2
         cumX = np.nan*np.ones((self.num_variables, self.num_bins))
-        cumH = np.nancumsum(histogram, axis=self.group_axis)
+        cumH = np.nancumsum(histogram, axis=self.groups_axis)
         for k in range(self.num_bins):
             cumX[:,k] = self.agg_(cumH[:,:,:k], arr1[:,:,:k], arr2[:,:,:k], keepbins=True)
         return cumX
 
     def ause(self, histogram, arr1=None, arr2=None): 
+        if not isinstance(histogram, np.ndarray): histogram = histogram.array
         cumX = self.cumagg(histogram, arr1, arr2)
         return np.nansum((cumX[:,1:]+cumX[:,:-1]), axis=self.bins_axis-1)/(2*self.num_bins)
 
     def get(self, histogram, arr1=None, arr2=None):
+        if not isinstance(histogram, np.ndarray): histogram = histogram.array
         results = {"values": None, "ause": None}
         if arr1 is None: arr1 = self.X1
         if arr2 is None: arr2 = self.X2
@@ -208,6 +213,7 @@ class DualStratifiedMetric(DualStratifiedTensor):
         return results
     
     def get_subset(self, histogram, indexes):
+        if not isinstance(histogram, np.ndarray): histogram = histogram.array
         subX1 = self.X1[indexes,:]
         subX2 = self.X2[indexes,:]
         return self.get(histogram, subX1, subX2)
@@ -220,8 +226,9 @@ class StratifiedMeanErrorMetric(StratifiedMetric):
     def evaluate_binned(self, binned_diff):
         return reduce_binned(binned_diff, reduce_fn=self.evaluate)
     def evaluate(self, diff):
-        return self.nanmean(self.fn(diff), axis=0)
+        return np.nanmean(self.fn(diff), axis=0)
     def agg(self, histogram, arr=None, keepbins=False):
+        if not isinstance(histogram, np.ndarray): histogram = histogram.array
         if arr is None: arr = self.X
         axes = 1 if keepbins else (1,2)
         return weighted_avg(arr, histogram, axis=axes)
@@ -229,16 +236,16 @@ class StratifiedMeanErrorMetric(StratifiedMetric):
 # regression metrics
 class StratifiedMSE(StratifiedMeanErrorMetric): 
     def __init__(self, *args, **kwargs): 
-        super().__init__(fn=lambda x: x**2)
+        super().__init__(fn=lambda x: x**2, *args, **kwargs)
 class StratifiedRMSE(StratifiedMSE):
     def evaluate(self, binned_diff):
         return np.sqrt(super().evaluate(binned_diff))    
 class StratifiedMAE(StratifiedMeanErrorMetric):
     def __init__(self, *args, **kwargs): 
-        super().__init__(fn=lambda x: np.abs(x))
+        super().__init__(fn=lambda x: np.abs(x), *args, **kwargs)
 class StratifiedMBE(StratifiedMeanErrorMetric):
     def __init__(self, *args, **kwargs): 
-        super().__init__(fn=lambda x: x)
+        super().__init__(fn=lambda x: x, *args, **kwargs)
     
 class StratifiedNLL(StratifiedMetric):
     def __init__(self, eps, *args, **kwargs):
@@ -248,12 +255,14 @@ class StratifiedNLL(StratifiedMetric):
         result = np.full((self.num_variables, self.num_bins), np.nan)
         for i in range(self.num_variables):
             for j in range(self.num_bins):
+                if binned_diff[i][j].shape==(0,) and binned_variance[i][j].shape==(0,): continue
                 result[i,j] = self.evaluate(binned_diff[i][j], binned_variance[i][j])
         return result
     def evaluate(self, diff, variance):
         variance[variance<self.eps] = self.eps
         return np.nanmean(0.5 * (np.log(variance) + (diff**2)/variance), axis=0)
     def agg(self, histogram, arr=None, keepbins=False):
+        if not isinstance(histogram, np.ndarray): histogram = histogram.array
         if arr is None: arr = self.X
         axes = 1 if keepbins else (1,2)
         return weighted_avg(arr, histogram, axis=axes)
@@ -270,6 +279,7 @@ class StratifiedUCE(DualStratifiedMetric):
         elif variable=="diff": return np.nanmean(values**2, axis=0)
         else: raise AttributeError(f"`variable` must be in ['variance', 'diff']. got '{variable}'")
     def agg(self, histogram, arr1=None, arr2=None, keepbins=False):
+        if not isinstance(histogram, np.ndarray): histogram = histogram.array
         if arr1 is None: arr1 = self.X1
         if arr2 is None: arr2 = self.X2
         N = histogram.sum(axis=(1,2)) if not keepbins else histogram.sum(axis=1)
@@ -290,6 +300,7 @@ class StratifiedENCE(StratifiedUCE):
     def evaluate(self, *args, **kwargs):
         return np.sqrt(super().evaluate(*args, **kwargs))
     def agg(self, histogram, arr1=None, arr2=None, keepbins=False):
+        if not isinstance(histogram, np.ndarray): histogram = histogram.array
         if arr1 is None: arr1 = self.X1
         if arr2 is None: arr2 = self.X2
         if axis is None: axis = self.groups_axis
@@ -317,8 +328,8 @@ class StratifiedCIAccuracy(StratifiedMetric):
         x = np.full((self.num_variables, self.num_bins, self.num_rhos), np.nan)
         for i in range(self.num_variables):
             for j in range(self.num_bins):
-                diff = binned_diff[i,j]
-                var = binned_variance[i,j]
+                diff = binned_diff[i][j]
+                var = binned_variance[i][j]
                 x[i,j,:] = self.evaluate(diff, var)                    
         return x
     def evaluate(self, diff, var):
@@ -330,6 +341,7 @@ class StratifiedCIAccuracy(StratifiedMetric):
                 x[k] = acc
         return x
     def agg(self, histogram, arr=None, keepbins=False):
+        if not isinstance(histogram, np.ndarray): histogram = histogram.array
         if arr is None: arr = self.X
         axes = 1 if keepbins else (1,2)
         return weighted_avg(arr, histogram, axis=axes)
@@ -338,26 +350,28 @@ class StratifiedAUCE(StratifiedMetric):
     def __init__(self, lo_rho, hi_rho, num_rhos, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.rhos = np.linspace(lo_rho, hi_rho, num_rhos)
-        self.ci_accs = StratifiedCIAccuracy(self.rhos)
+        self.ci_accs = StratifiedCIAccuracy(self.rhos, *args, **kwargs)
     def evaluate_binned(self, binned_diff, binned_variance):
         x = np.full((self.num_variables, self.num_bins), np.nan)
         accs = np.full((self.num_variables, self.num_bins, self.ci_accs.num_rhos), np.nan)
         for i in range(self.num_variables):
             for j in range(self.num_bins):
-                diff = binned_diff[i,j]
-                var = binned_variance[i,j]
+                diff = binned_diff[i][j]
+                var = binned_variance[i][j]
                 auce, acc = self.evaluate(diff, var)
                 x[i,j] = auce
                 accs[i,j,:] = acc
-        return x
+        return x, accs
     def evaluate(self, diff, var):
         if len(diff)>0:
             empirical_accs = self.ci_accs.evaluate(diff, var) # (R,)
             error = np.abs(self.rhos-empirical_accs)
-            return np.nansum((error[:,1:]+error[:,:-1]), axis=0)/(2*self.ci_accs.num_rhos), empirical_accs # ((1,), (R,))
+            print("[debug:356]", error.shape, empirical_accs.shape)
+            return np.nansum((error[1:]+error[:-1]), axis=0)/(2*self.ci_accs.num_rhos), empirical_accs # ((1,), (R,))
         else:
             return np.nan, np.full((self.ci_accs.num_rhos), np.nan) # ((1,), (R,))
     def agg(self, histogram, arr=None, keepbins=False):
+        if not isinstance(histogram, np.ndarray): histogram = histogram.array
         if arr is None: arr = self.X
         empirical_accs = self.ci_accs.agg(histogram, arr, keepbins) # (d,R) or (d,M,R)
         error = np.abs(self.rhos-empirical_accs)
@@ -365,7 +379,7 @@ class StratifiedAUCE(StratifiedMetric):
         else: return np.nansum((error[:,1:]+error[:,:-1]), axis=1)/(2*self.ci_accs.num_rhos)
 
 # Usefulness metrics
-class StratifiedCv(StratifiedMetric): 
+class StratifiedCv(DualStratifiedMetric): 
     """
     X1: mean_std(bin)=mean_std, X2: C_v(bin)*mean_std(dataset)=var_std
     """
@@ -391,6 +405,7 @@ class StratifiedCv(StratifiedMetric):
             return np.sqrt(np.nansum(values, axis=0)/(values.shape[0]-1))
         else: raise AttributeError(f"`variable` must be in ['mean_std', 'var_std']. got '{variable}'")
     def agg(self, histogram, arr1=None, arr2=None, keepbins=False):
+        if not isinstance(histogram, np.ndarray): histogram = histogram.array
         if arr1 is None: arr1 = self.X1
         if arr2 is None: arr2 = self.X2
         mu = weighted_avg(arr1, histogram, axis=1) if keepbins else weighted_avg(arr1, histogram, axis=(1,2))
@@ -399,12 +414,13 @@ class StratifiedCv(StratifiedMetric):
         result = np.sqrt(np.nansum(result, axis=axes)/(np.nansum(histogram, axis=axes)-1))/mu
         return result
     
-class StratifiedSRP(StratifiedMetric):
+class StratifiedSRP(DualStratifiedMetric):
     def evaluate_binned(self, binned_variance):
         return reduce_binned(binned_variance, reduce_fn=self.evaluate)
     def evaluate(self, variance):
-        return self.nanmean(self.fn(variance), axis=0)
+        return np.nanmean(self.fn(variance), axis=0)
     def agg(self, histogram, arr=None, keepbins=False):
+        if not isinstance(histogram, np.ndarray): histogram = histogram.array
         if arr is None: arr = self.X
         axes = 1 if keepbins else (1,2)
         return weighted_avg(arr, histogram, axis=axes)
@@ -456,7 +472,6 @@ class StratifiedRCU:
             nll=self.nll,
             uce=self.uce,
             ence=self.ence,
-            ci_accs=self.ci_accs,
             ci90_accs=self.ci90_accs,
             auce=self.auce,
         )    
@@ -466,7 +481,6 @@ class StratifiedRCU:
         return dict(
             histogram=self.histogram,
             mean_variance=self.mean_variance,
-            mean_mse=self.mean_mse,
             index_map=self.index_map,
             counter=self.counter,
         )
@@ -483,11 +497,11 @@ class StratifiedRCU:
         # add histogram
         p_variance, binned_variance, [binned_diff] = self.histogram.add(index, variance, others=[diff])
         # add mean variance
-        self.variance.add(index, p_variance)
+        self.mean_variance.add(index, p_variance)
         # compute mean diffs for mean error metrics
         error_kwargs = {}
         for metric_name, metric in [("mse", self.mse), ("rmse", self.rmse), ("mae", self.mae), ("mbe", self.mbe)]:
-            values = self.histogram.reduce_binned(binned_diff, lambda x: np.nanmean(metric.fn(x)))
+            values = reduce_binned(binned_diff, lambda x: np.nanmean(metric.fn(x)))
             error_kwargs[metric_name] = values
             metric.add(index, values)
         # add metrics
@@ -495,11 +509,11 @@ class StratifiedRCU:
             # get metric kwargs
             kwargs = {
                 k:v for k,v in list(self.kwargs.items())+[("binned_variance", binned_variance),("binned_diff", binned_diff),("counts", self.histogram[:,index,:])]
-                if k in filter(lambda x: x!="self", inspect.getfullargspec(metric.evaluate).args)
+                if k in filter(lambda x: x!="self", inspect.getfullargspec(metric.evaluate_binned).args)
             }
             # add metric
             values = metric.evaluate_binned(**kwargs)
-            if DualStratifiedMetric in metric.__class__.__bases__: metric.add(index, values[0], values[1])
+            if DualStratifiedMetric in metric.__class__.mro(): metric.add(index, values[0], values[1])
             elif metric==self.auce:
                 auce_values, auce_acc_values = values
                 self.auce.add(index, auce_values)
@@ -510,7 +524,7 @@ class StratifiedRCU:
         """eg rcu.get(["mse", "mbe"])"""
         # get metrics
         if metric_names is None: metric_names = list(self.metrics_tensors.keys())
-        metrics = [self.metrics_tensor[mid] for mid in metric_names]
+        metrics = [self.metrics_tensors[mid] for mid in metric_names]
         # compute
         results = {}
         for metric, metric_name in zip(metrics, metric_names):
@@ -529,6 +543,3 @@ class StratifiedRCU:
         for metric in metrics:
             results.append(metric.get_subset(self.histogram, indexes))
         return results
-
-    def get_all(self,  metric_names: Optional[List[str]]=None):
-        return self.get_subset(metric_names)
