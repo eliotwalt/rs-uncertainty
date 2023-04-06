@@ -97,7 +97,7 @@ class StratifiedHistogram(StratifiedTensor):
             - H[i,j,k] (float): number of samples in group i and bin j for variable i
         - bins (np.ndarray[num_variables, num_bins])
         """
-        super().__init__(*args, **kwargs)
+        super().__init__(args, kwargs)
         self.lo = lo
         self.hi = hi
         # linear binning
