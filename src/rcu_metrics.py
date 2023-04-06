@@ -38,6 +38,7 @@ class StratifiedTensor:
         (d, P, M, *)
         """
         self.num_variables, self.num_groups, self.num_bins = num_variables, num_groups, num_bins
+        print("ST init:", self.num_variables, self.num_groups, self.num_bins)
         self.X = np.nan*np.ones((num_variables, num_groups, num_bins), dtype=dtype)
         self.variables_axis, self.groups_axis, self.bins_axis = 0, 1, 2
     @property
@@ -99,7 +100,6 @@ class StratifiedHistogram(StratifiedTensor):
         super().__init__(*args, **kwargs)
         self.lo = lo
         self.hi = hi
-        print(dir(self))
         # linear binning
         self.bins = np.stack([
             np.linspace(self.lo[i], self.hi[i], self.num_bins) 
