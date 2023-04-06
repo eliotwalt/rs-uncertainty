@@ -45,8 +45,8 @@ class StratifiedTensor:
     @property
     def dtype(self): return self.X.dtype    
     def __getattribute__(self, attr: str):
-        try: self.X.__getattribute__(self, attr)
-        except: super().__getattribute__(self, attr)    
+        try: self.X.__getattribute__(attr)
+        except: super().__getattribute__(attr)    
     def add(self, index: int, values: np.ndarray):
         """assign along group axis"""
         self.X[:,index] = values
@@ -72,7 +72,7 @@ class DualStratifiedTensor:
     def dtype(self): return self.X1.dtype    
     def __getattribute__(self, attr: str):
         try: (self.X1.__getattribute__(self, attr), self.X2.__getattribute__(self, attr))
-        except: super().__getattribute__(self, attr)    
+        except: super().__getattribute__(attr)    
     def add(self, index: int, values1: np.ndarray, values2: np.ndarray):
         """assign along group axis"""
         self.X1[:,index] = values1
@@ -96,7 +96,7 @@ class StratifiedHistogram(StratifiedTensor):
             - H[i,j,k] (float): number of samples in group i and bin j for variable i
         - bins (np.ndarray[num_variables, num_bins])
         """
-        super().__init__(self, *args, **kwargs)
+        super().__init__(*args, **kwargs)
         self.lo = lo
         self.hi = hi
         # linear binning
@@ -229,16 +229,16 @@ class StratifiedMeanErrorMetric(StratifiedMetric):
 # regression metrics
 class StratifiedMSE(StratifiedMeanErrorMetric): 
     def __init__(self, *args, **kwargs): 
-        super().__init__(self, fn=lambda x: x**2)
+        super().__init__(fn=lambda x: x**2)
 class StratifiedRMSE(StratifiedMSE):
     def evaluate(self, binned_diff):
         return np.sqrt(super().evaluate(binned_diff))    
 class StratifiedMAE(StratifiedMeanErrorMetric):
     def __init__(self, *args, **kwargs): 
-        super().__init__(self, fn=lambda x: np.abs(x))
+        super().__init__(fn=lambda x: np.abs(x))
 class StratifiedMBE(StratifiedMeanErrorMetric):
     def __init__(self, *args, **kwargs): 
-        super().__init__(self, fn=lambda x: x)
+        super().__init__(fn=lambda x: x)
     
 class StratifiedNLL(StratifiedMetric):
     def __init__(self, eps, *args, **kwargs):
