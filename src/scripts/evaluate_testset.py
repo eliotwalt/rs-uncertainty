@@ -40,6 +40,8 @@ def main():
     print(f"Loading config file {args.cfg}...")
     with args.cfg.open("r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
+        for k, v in cfg.items():
+            if k.endswith("_dir"): cfg[k] = Path(v)
     projects = cfg["projects_east"]+cfg["projects_west"]+cfg["projects_north"]
     # Load standardization data
     with pjoin(cfg["pkl_dir"], "stats.yaml").open("r", encoding="utf-8") as f:
