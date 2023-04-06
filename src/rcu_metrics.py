@@ -37,11 +37,9 @@ class StratifiedTensor:
         """
         (d, P, M, *)
         """
-        print("ST init:", num_variables, num_groups, num_bins, dtype)
         self.X = np.nan*np.ones((num_variables, num_groups, num_bins), dtype=dtype)
         self.num_variables, self.num_groups, self.num_bins = self.X.shape
         self.variables_axis, self.groups_axis, self.bins_axis = 0, 1, 2
-        print("ST init:", self.num_variables, self.num_groups, self.num_bins, dtype)
     @property
     def array(self): return self.X
     @property
@@ -98,7 +96,6 @@ class StratifiedHistogram(StratifiedTensor):
             - H[i,j,k] (float): number of samples in group i and bin j for variable i
         - bins (np.ndarray[num_variables, num_bins])
         """
-        print("STH init:", args, kwargs)
         super().__init__(*args, **kwargs)
         self.lo = lo
         self.hi = hi
