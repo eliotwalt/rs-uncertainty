@@ -64,6 +64,8 @@ def main():
         lo = np.nanmin(variance_flat, axis=1)
         hi_variance[hi>hi_variance] = hi[hi>hi_variance]
         lo_variance[lo<lo_variance] = lo[lo<lo_variance]
+    print("Variances lower bound:", lo_variance.tolist())
+    print("Variances upper bound:", hi_variance.tolist())
     # initialize RCU metrics
     print("Initiating StratifiedRCU object...")
     rcu = StratifiedRCU(
