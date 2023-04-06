@@ -52,8 +52,11 @@ def main():
     print(f"Computing variance bounds in {cfg['pkl_dir']}...")
     lo_variance = np.full((5,), np.inf)
     hi_variance = np.full((5,), -np.inf)
-    for variance_file in tqdm(cfg["prediction_dir"].glob("*_variance.tif")):
+    # for variance_file in tqdm(list(cfg["prediction_dir"].glob("*_variance.tif"))):
+    variance_files = []
+    for variance_file in tqdm(list(cfg["prediction_dir"].glob("*_variance.tif"))[:3]): # Debug
         if variance_file.stem.split("_")[0] not in projects: continue
+        variance_files.append(variance_file)
         with rasterio.open(variance_file) as fh:
             variance = fh.read(fh.indexes)
         variance_flat = variance.reshape(5, -1)
@@ -65,20 +68,21 @@ def main():
     print("Initiating StratifiedRCU object...")
     rcu = StratifiedRCU(
         num_variables=len(cfg["data_bands"]),
-        num_groups=len(projects),
+        # num_groups=len(projects),
+        num_groups=3, # Debug
         num_bins=cfg["num_bins"],
         lo_variance=lo_variance,
         hi_variance=hi_variance
     )
     # compute stats online
     print(f"Computing stats online from in {cfg['prediction_dir']}...")
-    for mean_file in tqdm(cfg["prediction_dir"].glob('*_mean.tif')):
+    for variance_file in tqdm(variance_files):
         # load data
         project = mean_file.stem.split('_')[0]
         if project not in projects: continue
-        with rasterio.open(mean_file) as fh:
+        with rasterio.open(pjoin(cfg['prediction_dir'], f"{project}_mean.tif")) as fh:
             mean = fh.read(fh.indexes)
-        with rasterio.open(pjoin(cfg['prediction_dir'], f"{project}_variance.tif")) as fh:
+        with rasterio.open(variance_file) as fh:
             variance = fh.read(fh.indexes)
         with rasterio.open(pjoin(cfg['gt_dir'], f"{project}.tif")) as fh:
             gt = fh.read(fh.indexes)
@@ -91,15 +95,16 @@ def main():
         # get project metrics
         results[project] = rcu.get(project)
     # compute regions
-    print(f"Aggregegating metrics...")
-    for region in ["east", "west", "north"]:
-        region_projects = cfg[f"projects_{region}"]
-        results[region] = rcu.get_subset(region_projects)
+    # print(f"Aggregegating metrics...")
+    # for region in ["east", "west", "north"]:
+    #     region_projects = cfg[f"projects_{region}"]
+    #     results[region] = rcu.get_subset(region_projects) # Debug
     # compute all
     print(f"Aggregating across all projects...")
     results["global"] = rcu.get_all()
     # write results
-    res_file = pjoin(cfg["prediction_dir"], "metrics.yaml")
+    # res_file = pjoin(cfg["prediction_dir"], "metrics.yaml")
+    res_file = Path("ignore.debug-eval.metrics.yaml")
     print(f"writing results to {res_file}...")
     with res_file.open("w", encoding="utf-8") as f:
         yaml.dump(results, f, sort_keys=False)
