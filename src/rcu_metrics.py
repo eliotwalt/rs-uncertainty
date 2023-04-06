@@ -426,7 +426,7 @@ class StratifiedRCU:
         hi_rho: float=1-1e-3,
         num_rhos: int=100,
     ):
-        shape_kw={num_variables: num_variables, num_groups: num_groups, num_bins: num_bins}
+        shape_kw={"num_variables": num_variables, "num_groups": num_groups, "num_bins": num_bins}
         # stratified tensors
         self.histogram = StratifiedHistogram(lo_variance, hi_variance, **shape_kw)
         self.mean_variance = StratifiedTensor(**shape_kw)
