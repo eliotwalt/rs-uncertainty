@@ -90,10 +90,9 @@ def main():
             gt = fh.read(fh.indexes)
             gt[2] /= 100 # Cover/Dens normalization!!
             gt[4] /= 100
-        # standardize
-        variance /= (labels_std)**2
-        mean = (mean-labels_mean)/labels_std
-        gt = (gt-labels_mean)/labels_std 
+        # standardize meanH and p95
+        mean[[0,1]] = (mean[[0,1]]-labels_mean[[0,1]])/labels_std[[0,1]]
+        gt[[0,1]] = (gt[[0,1]]-labels_mean[[0,1]])/labels_std[[0,1]]
         # add project
         rcu.add_project(project, gt, mean, variance)
         # get project metrics

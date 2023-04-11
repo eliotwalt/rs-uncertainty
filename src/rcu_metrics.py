@@ -5,6 +5,9 @@ from itertools import chain
 from typing import *
 
 # Utils
+def nan_frac(arr):
+    return np.isnan(arr).sum()/(np.isnan(arr).sum()+(~np.isnan(arr)).sum())
+
 def weighted_avg(values, counts, axis):
     # print("[debug:9]", values.shape, counts.shape, (values*counts).shape, np.nansum(values*counts, axis=axis).shape, np.nansum(counts, axis=axis).shape)
     return np.nansum(values*counts, axis=axis)/np.nansum(counts, axis=axis)
@@ -181,6 +184,7 @@ class StratifiedMetric(StratifiedTensor):
         if not isinstance(histogram, np.ndarray): histogram = histogram.array
         results = {"values": None, "ause": None}
         if arr is None: arr = self.X
+        print(f"[debug:184] Arr[2] nan: {(np.isnan(arr[2]).sum())/(np.isnan(arr[2]).sum()+(~np.isnan(arr[2])).sum())} ({arr[2].shape})")
         results["values"] = self.agg(histogram, arr)
         results["ause"] = self.ause(histogram, arr)
         return results
@@ -505,6 +509,7 @@ class StratifiedRCU:
         hi_rho: float=1-1e-3,
         num_rhos: int=100,
     ):
+        self.num_variables = num_variables
         shape_kw={"num_variables": num_variables, "num_groups": num_groups, "num_bins": num_bins}
         # stratified tensors
         self.histogram = StratifiedHistogram(lo_variance, hi_variance, **shape_kw)
@@ -524,13 +529,12 @@ class StratifiedRCU:
         # other attributes
         self.index_map = dict()
         self.counter = 0
-        # Debug
-        print("[Debug:467] Metric tensors shapes?")
-        for mn, m in self.metrics_tensors.items():
-            print(mn, m.shape)
-        # end Debug
+        # # Debug
+        # print("[Debug:467] Metric tensors shapes?")
+        # for mn, m in self.metrics_tensors().items():
+        #     print(mn, m.shape)
+        # # end Debug
 
-    @property
     def metrics_tensors(self):
         return dict(
             mse=self.mse,
@@ -544,7 +548,6 @@ class StratifiedRCU:
             auce=self.auce,
         )    
     
-    @property
     def kwargs(self):
         return dict(
             histogram=self.histogram,
@@ -558,10 +561,10 @@ class StratifiedRCU:
         mask = ~np.isnan(mean).all(0)
         diff = mean[:,mask]-gt[:,mask]
         variance = variance[:,mask]
+        print(f"[debug:559] nans -> diff: {np.isnan(diff).sum()/((~np.isnan(diff)).sum()+np.isnan(diff).sum())}, variance: {np.isnan(variance).sum()/((~np.isnan(variance)).sum()+np.isnan(variance).sum())}")
         # index
         self.index_map[project_id] = self.counter
-        self.counter += 1
-        index = self.counter
+        index = self.index_map[project_id]
         # add histogram
         p_variance, binned_variance, [binned_diff] = self.histogram.add(index, variance, others=[diff])
         # add mean variance
@@ -573,42 +576,57 @@ class StratifiedRCU:
             error_kwargs[metric_name] = values
             metric.add(index, values)
         # add metrics
-        for metric in self.metrics_tensors.values():
+        for metric in self.metrics_tensors().values():
             # get metric kwargs
             kwargs = {
-                k:v for k,v in list(self.kwargs.items())+[("binned_variance", binned_variance),("binned_diff", binned_diff),("counts", self.histogram[:,index,:])]
+                k:v for k,v in list(self.kwargs().items())+[("binned_variance", binned_variance),("binned_diff", binned_diff),("counts", self.histogram[:,index,:])]
                 if k in filter(lambda x: x!="self", inspect.getfullargspec(metric.evaluate_binned).args)
             }
             # add metric
             values = metric.evaluate_binned(**kwargs)
-            if DualStratifiedMetric in metric.__class__.mro(): metric.add(index, values[0], values[1])
+            if isinstance(values, tuple):
+                print(f"[debug:587] {[v.shape for v in values]}")
+            else:
+                print(f"[debug:589] {values.shape}")
+            if DualStratifiedMetric in metric.__class__.mro(): 
+                print(f"[debug:591] {index}, {nan_frac(values[0])}, {nan_frac(values[1].shape)}")
+                metric.add(index, values[0], values[1])
             elif metric==self.auce:
                 auce_values, auce_acc_values = values
                 self.auce.add(index, auce_values)
                 self.auce.ci_accs.add(index, auce_acc_values)
             else: metric.add(index, values)
+        self.counter += 1
     
     def get(self, metric_names: Optional[List[str]]=None):
         """eg rcu.get(["mse", "mbe"])"""
         # get metrics
-        if metric_names is None: metric_names = list(self.metrics_tensors.keys())
-        metrics = [self.metrics_tensors[mid] for mid in metric_names]
+        if metric_names is None: metric_names = list(self.metrics_tensors().keys())
+        metrics = [self.metrics_tensors()[mid] for mid in metric_names]
         # compute
         results = {}
         for metric, metric_name in zip(metrics, metric_names):
-            results[metric_name] = metric.get(self.histogram)
+            res = metric.get(self.histogram)
+            for k, v in res.items():
+                res[k] = v.reshape(self.num_variables)
+            results[metric_name] = res
         return results
 
     def get_subset(self, project_ids: Optional[List[str]]=None, metric_names: Optional[List[str]]=None):
         """eg rcu.get_subset(EAST, ["mse", "uce"])"""
         assert project_ids is None or isinstance(project_ids, list)
         assert metric_names is None or isinstance(metric_names, list)
+        if metric_names is None: metric_names = list(self.metrics_tensors().keys())
         # get indexes and metrics
         indexes = self.index_map.values() if project_ids is None else [self.index_map[pid] for pid in project_ids]
-        metrics = self.metrics_tensors.values() if metric_names is None else [self.metrics_tensor[mid] for mid in metric_names]
+        metrics = [self.metrics_tensors()[mid] for mid in metric_names]
         # compute
-        results = []
-        for metric in metrics:
+        results = {}
+        for metric, metric_name in zip(metrics, metric_names):
             print("[debug:546]", metric)
-            results.append(metric.get_subset(self.histogram, indexes))
+            res =  metric.get_subset(self.histogram, indexes)
+            for k, v in res.items():
+                res[k] = v.reshape(self.num_variables)
+            results[metric_name] = res
+            print(f"[debug:624] {results[metric_name]['values'].shape} {results[metric_name]['ause'].shape}")
         return results
