@@ -88,7 +88,7 @@ def main():
             variance = fh.read(fh.indexes)
         with rasterio.open(pjoin(cfg['gt_dir'], f"{project}.tif")) as fh:
             gt = fh.read(fh.indexes)
-            gt[2] /= 100
+            gt[2] /= 100 # Cover/Dens normalization!!
             gt[4] /= 100
         # standardize
         variance /= (labels_std)**2
