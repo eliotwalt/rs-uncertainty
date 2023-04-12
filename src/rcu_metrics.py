@@ -459,12 +459,6 @@ class StratifiedRCU:
         #     print(mn, m.shape)
         # # end Debug
 
-    def copy(self):
-        # retrieve constructor args
-        num_variables, num_groups, num_bins = self.histogram.shape
-        lo_variance, hi_variance = self.histogram.lo, self.histogram.hi
-        eps_nll = self.nll.eps
-
     def metrics_tensors(self):
         return dict(
             mse=self.mse,
@@ -487,6 +481,56 @@ class StratifiedRCU:
             index_map=self.index_map,
             counter=self.counter,
         )
+    
+    def empty_copy(self, k=1):
+        # retrieve constructor args
+        num_variables, num_groups, num_bins = self.histogram.shape
+        num_bins /= k
+        lo_variance, hi_variance = self.histogram.lo, self.histogram.hi
+        eps_nll = self.nll.eps
+        lo_rho, hi_rho, num_rhos = self.auce.rhos.min(), self.auce.rhos.max(), len(self.auce.rhos)
+        rcu = self.__class__(
+            num_variables, num_groups, num_bins,
+            lo_variance, hi_variance,
+            eps_nll,
+            lo_rho, hi_rho, num_rhos
+        )
+        return rcu
+    
+    def copy(self):
+        rcu = self.empty_copy(k=1)
+        for key, value in self.kwargs.items():
+            rcu.__setattr__(key, value)
+        for key, value in self.metrics_tensors.items():
+            rcu.__setattr__(key, value)
+        return rcu
+    
+    def upsample(self, k: int):
+        # TODO
+        """
+        1. Compute bin mapping
+        2. upsample histogram -> sum joined bins
+        3. upsample metrics_tensors -> agg joined bins
+        4. (optional) upsample other useless tensors (e.g. mean_variance)
+        """
+        # create empty copy
+        rcu = self.empty_copy(k=k)
+        # compute
+        num_variables, num_groups, num_bins = rcu.histogram.shape
+        bin_map = [np.arange(i, i+k) for i in np.arange(0, num_bins, k)]
+        # upsample histogram
+        for i, bins in enumerate(bin_map):
+            rcu.histogram[:,:,i] = np.nansum(self.histogram[:,:,bins], axis=2)
+        # upsample metrics
+        for i, bins in enumerate(bin_map):
+            for metric, metric_tensor in self.metrics_tensors():
+                X = rcu.__getattr__(metric)
+                args = (self.histogram[:,:,bins],)
+                if DualStratifiedMetric in metric.__class__.mro(): args += (metric_tensor.X1[:,:,bins], metric_tensor.X2[:,:,bins])
+                else: args += (metric_tensor.X[:,:,bins],)
+                X[:,:,i] = metric_tensor.agg(*args)
+                rcu.__setattr__(metric, X)
+        return rcu
 
     def add_project(self, project_id: str, gt:np.ndarray, mean:np.ndarray, variance:np.ndarray):
         # nan mask flattening
@@ -567,6 +611,3 @@ class StratifiedRCUSubset(StratifiedRCU):
         super().__init__(*args, **kwargs)
     def metrics_tensors(self):
         return {k:v for k,v in super().metrics_tensors().items() if k in self.metric_names}
-    
-def upsample_rcu(rcu: StratifiedRCU, k: int):
-    pass
