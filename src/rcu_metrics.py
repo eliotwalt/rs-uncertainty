@@ -8,9 +8,9 @@ from typing import *
 def nan_frac(arr):
     return np.isnan(arr).sum()/(np.isnan(arr).sum()+(~np.isnan(arr)).sum())
 
-def weighted_avg(values, counts, axis):
+def weighted_avg(values, counts, axis, keepdims=False):
     # print("[debug:9]", values.shape, counts.shape, (values*counts).shape, np.nansum(values*counts, axis=axis).shape, np.nansum(counts, axis=axis).shape)
-    return np.nansum(values*counts, axis=axis)/np.nansum(counts, axis=axis)
+    return np.nansum(values*counts, axis=axis, keepdims=keepdims)/np.nansum(counts, axis=axis, keepdims=keepdims)
 
 def apply_binned(binned, fn, *args):
     num_variables, num_bins = len(binned), len(binned[0])
@@ -167,12 +167,12 @@ class StratifiedMetric(StratifiedTensor):
         """cumulatively aggregate"""
         if not isinstance(histogram, np.ndarray): histogram = histogram.array
         if arr is None: arr = self.X
-        cumshape = [self.num_variables, self.num_bins]+list(self.X.shape[3:])
+        cumshape = [self.num_variables, self.num_bins]
+        if self.__class__.__name__ == "StratifiedCIAccuracy": cumshape += list(self.X.shape[3:])
         cumX = np.nan*np.ones(cumshape)
         cumH = np.nancumsum(histogram, axis=self.groups_axis)
-        print(f"[Debug:170] cumX: {cumX.shape}, cumH: {cumH.shape}")
         for k in range(1,self.num_bins):
-            cumX[:,k] = self.agg(cumH[:,:,:k], arr[:,:,:k], keepbins=False)
+            cumX[:,k] = self.agg(cumH[:,:,:k], arr[:,:,:k], keepbins=False).reshape(cumX[:,k].shape)
         return cumX
     
     def ause(self, histogram, arr=None): 
@@ -215,8 +215,9 @@ class DualStratifiedMetric(DualStratifiedTensor):
         if arr2 is None: arr2 = self.X2
         cumX = np.nan*np.ones((self.num_variables, self.num_bins))
         cumH = np.nancumsum(histogram, axis=self.groups_axis)
-        for k in range(self.num_bins):
-            cumX[:,k] = self.agg(cumH[:,:,:k], arr1[:,:,:k], arr2[:,:,:k], keepbins=False)
+        print(f"[Debug:218] cumX: {cumX.shape}, cumH: {cumH.shape}")
+        for k in range(1,self.num_bins):
+            cumX[:,k] = self.agg(cumH[:,:,:k], arr1[:,:,:k], arr2[:,:,:k], keepbins=False).reshape(cumX[:,k].shape)
         return cumX
 
     def ause(self, histogram, arr1=None, arr2=None): 
@@ -303,15 +304,13 @@ class StratifiedUCE(DualStratifiedMetric):
         if not isinstance(histogram, np.ndarray): histogram = histogram.array
         if arr1 is None: arr1 = self.X1
         if arr2 is None: arr2 = self.X2
-        N = histogram.sum(axis=(1,2)) if not keepbins else histogram.sum(axis=1)
-        result = arr1-arr2
-        result = np.abs(np.nansum(result*histogram, axis=self.groups_axis, keepdims=True))
+        result = np.abs(np.nansum(histogram*(arr1-arr2), axis=self.groups_axis, keepdims=True))
         if keepbins:
-            result = result.reshape((self.num_variables,self.num_bins))
+            result = result/np.nansum(histogram, axis=self.groups_axis, keepdims=True)
+            result = result.reshape(self.num_variables,self.num_bins)
         else:
-            result = np.nansum(result, axis=self.bins_axis, keepdims=True)
-            result = result.reshape((self.num_variables,))
-        result /= N
+            result = np.nansum(result, axis=self.bins_axis, keepdims=True)/np.nansum(histogram, axis=(self.groups_axis,self.bins_axis), keepdims=True)
+            result = result.reshape(self.num_variables,)
         return result
 
 class StratifiedENCE(StratifiedUCE):
@@ -324,17 +323,15 @@ class StratifiedENCE(StratifiedUCE):
         if not isinstance(histogram, np.ndarray): histogram = histogram.array
         if arr1 is None: arr1 = self.X1
         if arr2 is None: arr2 = self.X2
-        N = histogram.sum(axis=(1,2)) if not keepbins else histogram.sum(axis=1)
-        r1 = np.sqrt(np.nansum(histogram*arr1, axis=self.groups_axis, keepdims=True))
-        r2 = np.sqrt(np.nansum(histogram*arr2, axis=self.groups_axis, keepdims=True))
-        result = r1-r2
-        result = np.abs(result) / r1
+        result = np.sqrt(np.nansum(histogram*arr1, axis=self.groups_axis, keepdims=True))
+        result -= np.sqrt(np.nansum(histogram*arr2, axis=self.groups_axis, keepdims=True))
+        result = np.abs(result)/np.sqrt(np.nansum(histogram*arr1, axis=self.groups_axis, keepdims=True))
         if keepbins:
-            result = result.reshape((self.num_variables,self.num_bins))
+            result = result / np.nansum(histogram, axis=self.groups_axis, keepdims=True)
+            result = result.reshape(self.num_variables,self.num_bins)
         else:
-            result = np.nansum(result, axis=self.bins_axis, keepdims=True)
-            result = result.reshape((self.num_variables,))
-        result /= N
+            result = np.nansum(result, axis=self.bins_axis, keepdims=True)/np.nansum(histogram, axis=(self.groups_axis,self.bins_axis), keepdims=True)
+            result = result.reshape(self.num_variables,)
         return result
 
 class StratifiedCIAccuracy(StratifiedMetric):
@@ -342,16 +339,19 @@ class StratifiedCIAccuracy(StratifiedMetric):
         super().__init__(*args, **kwargs)
         self.rhos = rhos
         self.num_rhos = len(rhos)
-        self.X = np.nan*np.ones((self.num_variables, self.num_groups, self.num_bins, self.num_rhos), dtype=self.dtype)
+        if self.num_rhos > 1:
+            self.X = np.nan*np.ones((self.num_variables, self.num_groups, self.num_bins, self.num_rhos), dtype=self.dtype)
     def evaluate_binned(self, binned_diff, binned_variance):
         # evaluate empirical acc for each variable, each bin and each confidence level
-        x = np.full((self.num_variables, self.num_bins, self.num_rhos), np.nan)
+        if self.num_rhos > 1: x = np.full((self.num_variables, self.num_bins, self.num_rhos), np.nan)
+        else: x = np.full((self.num_variables, self.num_bins), np.nan)
         for i in range(self.num_variables):
             for j in range(self.num_bins):
                 diff = binned_diff[i][j]
                 var = binned_variance[i][j]
-                x[i,j,:] = self.evaluate(diff, var)                    
-        return x
+                x[i,j] = self.evaluate(diff, var)                    
+        if self.num_rhos > 1: return x
+        else: return x.reshape((self.num_variables, self.num_bins))
     def evaluate(self, diff, var):
         x = np.full((self.num_rhos), np.nan)
         if len(diff)>0:
@@ -363,129 +363,53 @@ class StratifiedCIAccuracy(StratifiedMetric):
     def agg(self, histogram, arr=None, keepbins=False):
         if not isinstance(histogram, np.ndarray): histogram = histogram.array
         if arr is None: arr = self.X
-        if len(histogram.shape)<4: histogram = np.expand_dims(histogram, axis=-1)
+        histogram = histogram[(...,*([np.newaxis]*(len(arr.shape)-len(histogram.shape))))]
         axes = 1 if keepbins else (1,2)
         return weighted_avg(arr, histogram, axis=axes)
-
-class StratifiedAUCE(StratifiedMetric):
-    def __init__(self, lo_rho, hi_rho, num_rhos, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.rhos = np.linspace(lo_rho, hi_rho, num_rhos)
-        self.ci_accs = StratifiedCIAccuracy(self.rhos, *args, **kwargs)
-    def evaluate_binned(self, binned_diff, binned_variance):
-        """
-        x: AUCE values
-        accs: empirical accs
-        """
-        x = np.full((self.num_variables, self.num_bins), np.nan)
-        accs = np.full((self.num_variables, self.num_bins, self.ci_accs.num_rhos), np.nan)
-        for i in range(self.num_variables):
-            for j in range(self.num_bins):
-                diff = binned_diff[i][j]
-                var = binned_variance[i][j]
-                auce, acc = self.evaluate(diff, var)
-                x[i,j] = auce
-                accs[i,j,:] = acc
-        print("[debug:385] auce.eval_binned, x {}, accs {}".format(x.shape, accs.shape))
-        return x, accs
-    def evaluate(self, diff, var):
-        if len(diff)>0:
-            empirical_accs = self.ci_accs.evaluate(diff, var) # (R,)
-            error = np.abs(self.rhos-empirical_accs)
-            print("[debug:356]", error.shape, empirical_accs.shape)
-            return np.nansum((error[1:]+error[:-1]), axis=0)/(2*self.ci_accs.num_rhos), empirical_accs # ((1,), (R,))
-        else:
-            return np.nan, np.full((self.ci_accs.num_rhos), np.nan) # ((1,), (R,))
-    def agg(self, histogram, arr=None, keepbins=False, empirical_accs=None):
-        if not isinstance(histogram, np.ndarray): histogram = histogram.array
-        if arr is None: arr = self.X
-        if empirical_accs is None:
-            empirical_accs = self.ci_accs.agg(histogram, keepbins=True) # (d,R) or (d,M,R)
-        error = np.abs(self.rhos-empirical_accs).reshape(self.num_variables, -1, self.ci_accs.num_rhos)
-        if keepbins: res = np.nansum((error[:,:,1:]+error[:,:,:-1]), axis=2)/(2*self.ci_accs.num_rhos)
-        else: res = np.nansum((error[:,1:]+error[:,:-1]), axis=1)/(2*self.ci_accs.num_rhos)
-        print(f"[debug:403] err:{error.shape}, empaccs:{empirical_accs.shape}, keepbins: {keepbins}, res:{res.shape}")
-        return res
-
-    def cumagg(self, histogram, arr=None, empirical_accs=None):
-        """cumulatively aggregate"""
-        if not isinstance(histogram, np.ndarray): histogram = histogram.array
-        if arr is None: arr = self.X
-        cumshape = [self.num_variables, self.num_bins]+list(self.X.shape[3:])
-        cumX = np.nan*np.ones(cumshape)
-        cumH = np.nancumsum(histogram, axis=self.groups_axis)
-        empirical_accs = empirical_accs.reshape(self.num_variables, cumH.shape[1], self.num_bins, self.ci_accs.num_rhos)
-        print(f"[debug:415] cumH: {cumH.shape}, cumX: {cumX.shape}, empacc: {empirical_accs.shape}")
-        for k in range(1,self.num_bins):
-            if empirical_accs is None:
-                cumX[:,k] = self.agg(cumH[:,:,:k], arr[:,:,:k], keepbins=False)
-            else:
-                cumX[:,k] = self.agg(cumH[:,:,:k], arr[:,:,:k], empirical_accs=empirical_accs[:,:,:k], keepbins=False)
-        return cumX
-
-    def ause(self, histogram, arr=None, empirical_accs=None): 
-        if not isinstance(histogram, np.ndarray): histogram = histogram.array
-        cumX = self.cumagg(histogram, arr, empirical_accs)
-        return np.nansum((cumX[:,1:]+cumX[:,:-1]), axis=self.bins_axis-1)/(2*self.num_bins)
     
-    def get(self, histogram, arr=None, empirical_accs=None):
+class StratifiedAUCE(StratifiedCIAccuracy):
+    def __init__(self, lo_rho, hi_rho, num_rhos, *args, **kwargs):
+        rhos = np.linspace(lo_rho, hi_rho, num_rhos)
+        super().__init__(rhos, *args, **kwargs)
+    def agg(self, histogram, arr=None, keepbins=False):
         if not isinstance(histogram, np.ndarray): histogram = histogram.array
-        results = {"values": None, "ause": None}
-        if arr is None: arr = self.X
-        if empirical_accs is None:
-            empirical_accs = self.ci_accs.X
-        results["values"] = self.agg(histogram, arr, empirical_accs=empirical_accs)
-        results["ause"] = self.ause(histogram, arr, empirical_accs=empirical_accs)
-        return results
-
-    def get_subset(self, histogram, indexes):
-        if not isinstance(histogram, np.ndarray): histogram = histogram.array
-        subX = self.X[:,indexes,:]
-        histogram = histogram[:,indexes,:]
-        empirical_accs = self.ci_accs.agg(histogram, self.ci_accs.X[:,indexes,:], keepbins=True) # (d,R) or (d,M,R)
-        return self.get(histogram, subX, empirical_accs=empirical_accs)
+        empirical = super().agg(histogram, arr, keepbins)
+        cerr = np.abs(self.rhos-empirical)
+        return np.nansum(cerr[...,1:]+cerr[...,:-1], axis=-1)/(2*self.num_rhos)
 
 # Usefulness metrics
-class StratifiedCv(DualStratifiedMetric): 
+class StratifiedCv(DualStratifiedMetric):
     """
-    X1: mean_std(bin)=mean_std, X2: C_v(bin)*mean_std(dataset)=var_std
+    X1: mean_std (mu), X1: var_std (sum((sigma-mu)^2))
     """
     def evaluate_binned(self, binned_variance):
-        # to std
-        binned_std = apply_binned(binned_variance, fn=lambda x: np.sqrt(x))
-        # compute mean std
-        mean_std = reduce_binned(binned_std, self.evaluate, "mean_std") #(d,M)
-        # unbias std: not so elegant sorry
-        binned_std = [
-            [
-                list(np.array(binned_std[i][j])-mean_std[i][j])
-                for j in range(self.num_bins)
-            ] 
-            for i in range(self.num_variable)
-        ]
-        # compute std variance in each bin/variable
-        var_std = reduce_binned(binned_std, self.evaluate, "var_std") #(d,M)
+        mean_stds = np.full((self.num_variables, self.num_bins), np.nan)
+        var_stds = np.full((self.num_variables, self.num_bins), np.nan)
+        for i in range(self.num_variables):
+            for j in range(self.num_bins):
+                if binned_variance[i][j].shape!=(0,):
+                    mean_stds[i,j], var_stds[i,j] = self.evaluate(binned_variance[i][j])
+        return mean_stds, var_stds
+    def evaluate(self, var):
+        std = np.sqrt(var)
+        mean_std = np.nanmean(std, axis=0)
+        var_std = np.nansum((std-mean_std)**2, axis=0)
         return mean_std, var_std
-    def evaluate(self, values, variable):
-        if variable=="mean_std": return np.nanmean(values, axis=0)
-        elif variable=="var_std": 
-            return np.sqrt(np.nansum(values, axis=0)/(values.shape[0]-1))
-        else: raise AttributeError(f"`variable` must be in ['mean_std', 'var_std']. got '{variable}'")
     def agg(self, histogram, arr1=None, arr2=None, keepbins=False):
         if not isinstance(histogram, np.ndarray): histogram = histogram.array
         if arr1 is None: arr1 = self.X1
         if arr2 is None: arr2 = self.X2
-        mu = weighted_avg(arr1, histogram, axis=1) if keepbins else weighted_avg(arr1, histogram, axis=(1,2))
-        result = (histogram-1)*self.arr2
-        axes = 1 if keepbins else (1,2)
-        result = np.sqrt(np.nansum(result, axis=axes)/(np.nansum(histogram, axis=axes)-1))/mu
-        return result
+        axes = (self.groups_axis,self.bins_axis) if not keepbins else self.groups_axis
+        mu = weighted_avg(arr1, histogram, axis=axes, keepdims=True)
+        result = np.sqrt(np.nansum(arr2, axis=axes, keepdims=True)/(np.nansum(histogram, axis=axes, keepdims=True)-1))/mu
+        if keepbins: return result.reshape(self.num_variables, self.num_bins)
+        else: return result.reshape(self.num_variables,)
     
-class StratifiedSRP(DualStratifiedMetric):
+class StratifiedSRP(StratifiedMetric):
     def evaluate_binned(self, binned_variance):
         return reduce_binned(binned_variance, reduce_fn=self.evaluate)
     def evaluate(self, variance):
-        return np.nanmean(self.fn(variance), axis=0)
+        return np.nanmean(variance, axis=0)
     def agg(self, histogram, arr=None, keepbins=False):
         if not isinstance(histogram, np.ndarray): histogram = histogram.array
         if arr is None: arr = self.X
@@ -535,6 +459,12 @@ class StratifiedRCU:
         #     print(mn, m.shape)
         # # end Debug
 
+    def copy(self):
+        # retrieve constructor args
+        num_variables, num_groups, num_bins = self.histogram.shape
+        lo_variance, hi_variance = self.histogram.lo, self.histogram.hi
+        eps_nll = self.nll.eps
+
     def metrics_tensors(self):
         return dict(
             mse=self.mse,
@@ -546,6 +476,8 @@ class StratifiedRCU:
             ence=self.ence,
             ci90_accs=self.ci90_accs,
             auce=self.auce,
+            cv=self.cv,
+            srp=self.srp
         )    
     
     def kwargs(self):
@@ -591,11 +523,9 @@ class StratifiedRCU:
             if DualStratifiedMetric in metric.__class__.mro(): 
                 print(f"[debug:591] {index}, {nan_frac(values[0])}, {nan_frac(values[1].shape)}")
                 metric.add(index, values[0], values[1])
-            elif metric==self.auce:
-                auce_values, auce_acc_values = values
-                self.auce.add(index, auce_values)
-                self.auce.ci_accs.add(index, auce_acc_values)
-            else: metric.add(index, values)
+            else: 
+                print(f"[debug:600] {values.shape}")
+                metric.add(index, values)
         self.counter += 1
     
     def get(self, metric_names: Optional[List[str]]=None):
@@ -623,10 +553,20 @@ class StratifiedRCU:
         # compute
         results = {}
         for metric, metric_name in zip(metrics, metric_names):
-            print("[debug:546]", metric)
+            print("[debug:546] Getting:", metric)
             res =  metric.get_subset(self.histogram, indexes)
             for k, v in res.items():
                 res[k] = v.reshape(self.num_variables)
             results[metric_name] = res
             print(f"[debug:624] {results[metric_name]['values'].shape} {results[metric_name]['ause'].shape}")
         return results
+
+class StratifiedRCUSubset(StratifiedRCU):
+    def __init__(self, metric_names, *args, **kwargs):
+        self.metric_names = metric_names
+        super().__init__(*args, **kwargs)
+    def metrics_tensors(self):
+        return {k:v for k,v in super().metrics_tensors().items() if k in self.metric_names}
+    
+def upsample_rcu(rcu: StratifiedRCU, k: int):
+    pass
