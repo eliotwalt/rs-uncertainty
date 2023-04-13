@@ -1,680 +1,526 @@
 import numpy as np
-from itertools import chain
+import inspect
 import scipy.stats
-import yaml
+from itertools import chain
+from typing import *
 from copy import deepcopy
 
-REGRESSION_METRICS = ["mse", "mae", "rmse", "mbe", "nll"]
-UQ_METRICS = ["uce", "ence", "auce", "r09", "c_v", "srp", "ause_rmse", "ause_uce"]
-METRICS = list(chain(REGRESSION_METRICS, UQ_METRICS))
-UQ_METRICS = ["uce", "ence", "auce", "r09", "c_v", "srp", "ause_rmse", "ause_uce"]
+# Utils
+def arrequal(a, b):
+    if np.isnan(a).sum()==a.flatten().shape[0] and np.isnan(b).sum()==b.flatten().shape[0]:
+        return True # full nan arrays
+    try: np.testing.assert_equal(a,b)
+    except: return False
+    return True
 
-VARIABLE_NAMES = ['P95', 'MeanH', 'Dens', 'Gini', 'Cover']
-EAST = ['346', '9', '341', '354', '415', '418', '416', '429', '439', '560', '472', '521', '498',
-        '522', '564', '764', '781', '825', '796', '805', '827', '891', '835', '920', '959', '1023', '998',
-        '527', '477', '542', '471']
-WEST = ['528', '537', '792', '988', '769']
-NORTH = ['819', '909', '896']
-GLOBAL = ["west", "east", "north"]
-GROUPS = {"east": EAST, "west": WEST, "north": NORTH, "global": GLOBAL}
+def nan_frac(arr):
+    if arr.shape==(0,): return 0.
+    return np.isnan(arr).sum()/(np.isnan(arr).sum()+(~np.isnan(arr)).sum())
 
+def weighted_avg(values, counts, axis, keepdims=False):
+    return np.nansum(values*counts, axis=axis, keepdims=keepdims)/np.nansum(counts, axis=axis, keepdims=keepdims)
 
-def weighted_avg(values, counts, axis):
-    return np.nansum(values*counts, axis=axis)/np.nansum(counts, axis=axis)
+def reduce_binned(binned, reduce_fn, *args):
+    num_variables, num_bins = len(binned), len(binned[0])
+    result = np.full((num_variables, num_bins), np.nan)
+    for i in range(num_variables):
+        for j in range(num_bins):
+            if binned[i][j].shape==(0,): continue
+            result[i,j] = reduce_fn(binned[i][j], *args) # reduce list binned[i][j] into single value
+    return result
 
-# Binned variance
-def binned_variance(diff, variance, n_bins, var_mins=None, var_maxs=None, *args, **kwargs):
-    """
-    Compute mean MSE and mean variance in linear bins
-
-    Args:
-    - variance (np.ndarray[d, n]): predicted variance for each variable (d) and each pixel in the dataset (n)
-    - diff (np.ndarray[d, n]): signed errors for each variable (d) and each pixel in the dataset (n)
-    - n_bins (int): number of bins
-
-    Returns:
-    - mean_mses (np.ndarray[n_bins]): mean MSE in each bin
-    - mean_vars (np.ndarray[n_bins]): mean variance in each bin
-    - histogram (np.ndarray[n_bins]): number of samples in each bin
-    """
-    # initialize
-    d = diff.shape[0]
-    histogram = np.empty((d, n_bins))
-    mean_vars = np.empty((d, n_bins))
-    mean_mses = np.empty((d, n_bins))
-    # loop on variables
-    for i, (var, eps) in enumerate(zip(variance, diff)):
-        # Bin variance linearly and get sample indexes
-        var_min = var_mins[i] if var_mins is not None else var.min()
-        var_max = var_maxs[i] if var_maxs is not None else var.max()
-        bins = np.linspace(var_min, var_max, n_bins)
-        bins_ids = np.digitize(var, bins=bins)-1 # digitize is in [1, n_bins] => -1 makes [0, n_bins-1]
-        # loop on bins to compute stats
-        for bin_id in range(n_bins):
-            # bin mask
-            mask = bins_ids==bin_id
-            bin_var, bin_diff = var[mask], eps[mask]
-            # stats
-            histogram[i,bin_id] = mask.sum().astype(np.float32)
-            if histogram[i,bin_id]!=0: 
-                mean_vars[i,bin_id] = bin_var.mean()
-                mean_mses[i,bin_id] = (bin_diff**2).mean()
-            else: # empty bin!! set to NaN
-                mean_vars[i,bin_id] = np.nan
-                mean_mses[i,bin_id] = np.nan
-    # make sure the only nan and zeros correspond to each others
-    assert (np.isnan(mean_mses)==np.isnan(mean_vars)).all() and (np.isnan(mean_vars)==(histogram==0.)).all()
-    return mean_mses, mean_vars, histogram
-
-def area_under_spline(x, y):
-    return 0.5*((x[:,1:]-x[:,:-1])*(y[:,:-1]+y[:,1:])).sum(1)
-
-def sparsification_curve_x(variance, x, m, arr_dict):
-    """arr_dict contain arrays on which to compute x"""
-    N = variance.shape[1]
-    nus = np.array([k*m for k in range(int(1/m)+1)])
-    # sparsification curve
-    sc = []
-    # sort indexes by increasing variance
-    sorted_idx = np.argsort(variance, axis=1)
-    # sort argument arrays
-    for k, v in arr_dict.items():
-        arr_dict[k] = np.take_along_axis(v, sorted_idx, axis=1)
-    for nu in nus:
-        idxs = np.take_along_axis(sorted_idx, sorted_idx)
-        # create sub_arrays
-        sub_arr_dict = {}
-        for k, v in arr_dict.items():
-            sub_arr_dict[k] = v[:,:int(nu*N)]
-        sc.append(x(**sub_arr_dict))
-    # make nus, sc array for AU
-    sc = np.stack(sc, axis=1) # (d, 1/m)
-    nus = np.stack([nus for _ in range(5)], axis=0) # (d, 1/m)
-    return nus, sc
-
-# Regression metrics
-def mae(diff, *args, **kwargs): return np.abs(diff).mean(1)
-def mse(diff, *args, **kwargs): return (diff**2).mean(1)
-def rmse(diff, *args, **kwargs): return np.sqrt((diff**2).mean(1))
-def mbe(diff, *args, **kwargs): return diff.mean(1)
-
-def nll(diff, variance, nll_eps, *args, **kwargs):
-    v = variance
-    v[v<nll_eps] = nll_eps # avoid numerical issues
-    return 0.5 * (np.log(v) + (diff**2)/v).mean(1)
-
-# UQ metrics
-def uce(mean_mses, mean_vars, histogram, *args, **kwargs): 
-    N = histogram[0].sum()
-    return np.nansum(histogram*np.abs(mean_vars-mean_mses), axis=1)/N
-
-# def ence(mean_rmses, mean_stds, histogram, *args, **kwargs):
-    # N = histogram[0].sum()
-    # return np.nansum(np.abs(mean_stds-mean_rmses)/mean_stds, axis=1)/N
-def ence(mean_rmses, mean_stds, *args, **kwargs):
-    return np.nansum(np.abs(mean_stds-mean_rmses)/mean_rmses, axis=1)
-
-def empirical_accuracy(diff, variance, rho, *args, **kwargs):
-    N = diff.shape[1]
-    # intervals
-    half_width = scipy.stats.norm.ppf((1+rho)/2)*np.sqrt(variance) # (d,n)
-    # compute acc
-    empirical_acc = np.count_nonzero(np.abs(diff)<half_width, axis=1)/N
-    return empirical_acc
-
-def auce(diff, variance, n_rho, expected_accs, return_acc=False, *args, **kwargs):
-    d, N = diff.shape
-    # accuracies
-    empirical_accs = []
-    for rho in expected_accs:
-        # compute empirical acc
-        empirical_acc = empirical_accuracy(diff, variance, rho)
-        empirical_accs.append(np.expand_dims(empirical_acc, axis=1))
-    # make arr
-    empirical_accs = np.concatenate(empirical_accs, axis=1) # (d,n_rho)
-    expected_accs = np.stack([expected_accs]*d, axis=0)
-    # compute AU
-    au = area_under_spline(x=expected_accs, y=np.abs(expected_accs-empirical_accs))
-    if return_acc: return au, empirical_accs
-    else: return au
-
-def r09(diff, variance, *args, **kwargs): 
-    return empirical_accuracy(diff, variance, rho=0.9)
-
-def c_v(std, mean_std, *args, **kwargs):
-    n = std.shape[1]
-    mv = np.expand_dims(mean_std, axis=1) # (d,1)
-    return np.sqrt(1/(n-1)*((std-mv)**2).sum(1))/mean_std
-    # return np.sqrt(((std-mv)**2).sum(1)/(n-1))/mv.squeeze(1)
-
-def srp(variance, *args, **kwargs):
-    return variance.mean(1)
-
-def ause(nus, sc):
-    return area_under_spline(nus, sc)
-
-def ause(variance, metric, ause_m, *args, **kwargs):
-    """
-    Returns metric in groups of decreasing maximum variance
-    """
-    # remove binned kwargs
-    [kwargs.pop(kw, None) for kw in ["mean_mses", "mean_vars", "histogram"]]
-    # dims
-    d, n = variance.shape
-    n_rm = int(n*ause_m)
-    num_groups = int(n/n_rm)
-    # sparsification curve
-    sc = [] 
-    # sort all arrays by variance index
-    sorted_idx = np.argsort(variance, axis=1)
-    variance = np.take_along_axis(variance, sorted_idx, axis=1)
-    for arg in args:
-        if isinstance(arg, np.ndarray): 
-            arg = np.take_along_axis(arg, sorted_idx, axis=1)
-    for k, v in kwargs.items():
-        if isinstance(v, np.ndarray) and k!="labels_mean":
-            kwargs[k] = np.take_along_axis(v, sorted_idx, axis=1)
-    # compute ause in each group (from all variance to little variance)
-    for i in range(num_groups):
-        # group indexes
-        group_idx = np.arange(0, n-i*n_rm)
-        # select groups
-        tmp_var = variance[:,group_idx]
-        tmp_args = [
-            a[:,group_idx] if isinstance(a, np.ndarray) else a
-            for a in args
-        ]
-        tmp_kwargs = {
-            k: v[:,group_idx] if isinstance(v, np.ndarray) and k!="labels_mean" else v
-            for k,v in kwargs.items()
-        }
-        tmp_kwargs["variance"]=tmp_var
-        # get variance bin if needed
-        if metric in  [uce, ence]:
-            mean_mses, mean_vars, histogram = binned_variance(*tmp_args, **tmp_kwargs)
-            tmp_kwargs["mean_vars"]=mean_vars
-            tmp_kwargs["mean_mses"]=mean_mses
-            tmp_kwargs["histogram"]=histogram
-        err = metric(*tmp_args, **tmp_kwargs)
-        if not len(err.shape)==2: err = np.expand_dims(err, axis=1)
-        sc.append(err)
-    # prepare curve
-    sc.append(np.zeros((d,1)))
-    y = np.concatenate(sc[::-1], axis=1) # (d, num_groups)
-    x = np.stack([np.arange(0,1+ause_m,ause_m)]*d, axis=0)
-    return area_under_spline(x,y)
-
-def ause_rmse(variance, ause_m, *args, **kwargs):
-    return ause(variance, rmse, ause_m, *args, **kwargs)
-
-def ause_uce(variance, ause_m, *args, **kwargs):
-    return ause(variance, uce, ause_m, *args, **kwargs)
-
-class RUQMetrics:
+# stratified tensor parent
+class StratifiedTensor():
     def __init__(
         self, 
-        n_bins,
-        labels_mean,
-        nll_eps=1e-06,
-        n_rho=100,
-        rho_min=1e-3,
-        rho_max=1e-3,
-        ause_m=.05,
-        regression_metrics=REGRESSION_METRICS,
-        uq_metrics=UQ_METRICS,
-        groups=GROUPS,
-        variable_names=VARIABLE_NAMES
+        num_tensors: int,
+        num_variables: int, 
+        num_groups: int, 
+        num_bins: int,
+        dtype: Union[str, np.dtype]=np.float32
     ):
-        # attributes
-        self.n_bins = n_bins
-        self.labels_mean = labels_mean
-        self.nll_eps = nll_eps
-        self.n_rho = n_rho
-        self.rho_min = rho_min 
-        self.rho_max = rho_max 
-        self.ause_m = ause_m
-        self.regression_metrics = regression_metrics
-        self.uq_metrics = uq_metrics
-        self.groups = groups
-        self.variable_names = variable_names
-        # accumulators: allow for running computations
-        self.diffs = {}
-        self.variances = {}
-        self.metrics = {}
-        self.groups = {group_id: [] for group_id in GROUPS.keys()}
+        """
+        (T, d, P, M, *)
+        """
+        self.X = np.nan*np.ones((num_tensors, num_variables, num_groups, num_bins), dtype=dtype)
+        self.num_tensors, self.num_variables, self.num_groups, self.num_bins = self.X.shape
+        self.variables_axis, self.groups_axis, self.bins_axis = 0, 1, 2 # axis in each individual tensor, i.e. in X[i]
+    def __getitem__(self, sel): return self.X.__getitem__(sel)
+    @property
+    def array(self): return self.X
+    @property
+    def dtype(self): return self.X.dtype    
+    @property
+    def shape(self): return self.X.shape
+    def add(self, index: int, *values: np.ndarray):
+        """assign along group axis"""
+        for i, vals in enumerate(values):
+            self.X[i,:,index] = vals
+    def __eq__(self, other):
+        if type(other)!=type(self): return False
+        else: 
+            if not arrequal(self.X,other.X): return False 
+        return True
 
-    def add_project(self, project_id, mean, variance, gt):
-        assert mean.shape == variance.shape == gt.shape
-        assert mean.shape[0]==len(self.variable_names), f"arrays must be of shape (num_variables, num_samples)"
-        # masked difference
+# histogram
+class StratifiedHistogram(StratifiedTensor):
+    def __init__(
+        self, 
+        lo: np.ndarray, 
+        hi: np.ndarray, 
+        *args, **kwargs
+    ):
+        """Multivariate multigroup histogram: count the number of values for each variable and each group
+        Args:
+        - lo (np.ndarray[num_variables]): minimum value for each variable
+        - hi (np.ndarray[num_variables): maximum value for each variable
+
+        Attributes:
+        - X(np.ndarray[num_variables, num_groups, num_bins]): group histogram, i.e.
+            - H[i,j,k] (float): number of samples in group i and bin j for variable i
+        - bins (np.ndarray[num_variables, num_bins])
+        """
+        super().__init__(1, *args, **kwargs)
+        self.lo = lo
+        self.hi = hi
+        # linear binning
+        self.bins = np.stack([
+            np.linspace(self.lo[i], self.hi[i], self.num_bins) 
+            for i in range(self.num_variables)
+        ], axis=self.variables_axis)
+    
+    def add(self, index: int, values: np.ndarray, others: List[np.ndarray]=None):
+        """Add new group to histogram
+        
+        Args:
+        - values (np.ndarray[num_variables, num_samples]): array of values to
+
+        returns:
+        - mean_values (np.ndarray[num_variables, num_bins]): mean values for each bin and each variable
+        - binned_values (List[np.ndarray[num_variables, num_samples]]): list of num_variables arrays containing values of each bin
+        - binned_others (List[List[np.ndarray[num_variables, num_samples]]]): list of list of num_variables arrays containing other values in each bin
+        """
+        # X: (vars, groups, bin) -> add to X[:,index,:]        
+        binned_values = [[[] for _ in range(self.num_bins)] for _ in range(self.num_variables)]
+        if others is not None: 
+            assert isinstance(others, list), "others must be a list of arrays, got {}".format(type(others))
+            binned_others = [[[[] for _ in range(self.num_bins)] for _ in range(self.num_variables)] for _ in range(len(others))]
+        # allocate to bins
+        bins_ids = np.stack(
+            [np.digitize(d_values, bins=self.bins[i])-1 
+            for i, d_values in enumerate(values)], axis=0
+        )
+        # bin loop
+        for bin_id in range(self.num_bins):
+            # mask
+            mask = (bins_ids==bin_id)
+            for i, variable_mask in enumerate(mask):
+                self.X[0,:,index,bin_id] = mask.sum(axis=1)
+                binned_values[i][bin_id] = values[i,variable_mask]
+                for j, other in enumerate(others): 
+                    binned_others[j][i][bin_id] = others[j][i,variable_mask]
+        # compute mean values
+        mean_values = reduce_binned(binned_values, reduce_fn=lambda x: np.nanmean(x, axis=0))
+        return mean_values, binned_values, binned_others
+    
+# metrics Parent
+class StratifiedMetric(StratifiedTensor):
+    def evaluate_binned(self, *args, **kwargs):
+        """compute the metric in each bin and each variables"""
+        raise NotImplementedError()
+
+    def compute(self, *args, **kwargs):
+        """actually compute the metric in a given set of variables"""
+        raise NotImplementedError()
+
+    def agg(self, *args, **kwargs): 
+        """aggregate (d,P,M)->(d,) if not keepbins else (d,P,M)->(d,M)"""
+        raise NotImplementedError()
+    
+    def cumagg(self, histogram, *arrs):
+        cummetric = np.nan*np.ones((self.num_variables, self.num_bins))
+        cumH = np.nancumsum(histogram, axis=self.groups_axis)
+        for k in range(1,self.num_bins):
+            binarrs = (arr[:,:,:k] for arr in arrs)
+            cummetric[:,k] = self.agg(cumH[:,:,:k], *binarrs).reshape(cummetric[:,k].shape)
+        return cummetric
+
+    def ause(self, histogram, *arrs): 
+        cummetric = self.cumagg(histogram, *arrs)
+        return np.nansum((cummetric[:,1:]+cummetric[:,:-1]), axis=self.bins_axis-1)/(2*self.num_bins)
+
+    def get(self, histogram, *arrs):
+        if not isinstance(histogram, np.ndarray): histogram = histogram.array[0]
+        results = {"values": None, "ause": None}
+        if arrs==(): arrs = tuple(self.X[i] for i in range(self.num_tensors))
+        results["values"] = self.agg(histogram, *arrs)
+        results["ause"] = self.ause(histogram, *arrs)
+        return results
+    
+    def get_subset(self, histogram, indexes):
+        if not isinstance(histogram, np.ndarray): histogram = histogram.array[0]
+        histogram = histogram[:,indexes]
+        subXs = tuple(self.X[i][:,indexes] for i in range(self.num_tensors))
+        results = self.get(histogram, *subXs)
+        return results
+    
+    def add(self, index, *args, **kwargs):
+        values = self.evaluate_binned(*args, **kwargs)
+        if not isinstance(values, tuple): values = (values,)
+        super().add(index, *values)
+
+# regression metrics parent
+class StratifiedMeanErrorMetric(StratifiedMetric):
+    def __init__(self, fn: Callable, *args, **kwargs):
+        self.fn = fn
+        super().__init__(1, *args, **kwargs)
+    def evaluate_binned(self, binned_diff):
+        result = reduce_binned(binned_diff, reduce_fn=self.evaluate)
+        return result
+    def evaluate(self, diff):
+        return np.nanmean(self.fn(diff), axis=0)
+    def agg(self, histogram, *arrs):
+        axes = (1,2)
+        assert len(arrs)==1
+        return weighted_avg(arrs[0], histogram, axis=axes)
+    
+# regression metrics
+class StratifiedMSE(StratifiedMeanErrorMetric): 
+    def __init__(self, *args, **kwargs): 
+        super().__init__(fn=lambda x: x**2, *args, **kwargs)
+class StratifiedRMSE(StratifiedMSE):
+    def evaluate(self, binned_diff):
+        return np.sqrt(super().evaluate(binned_diff))    
+class StratifiedMAE(StratifiedMeanErrorMetric):
+    def __init__(self, *args, **kwargs): 
+        super().__init__(fn=lambda x: np.abs(x), *args, **kwargs)
+class StratifiedMBE(StratifiedMeanErrorMetric):
+    def __init__(self, *args, **kwargs): 
+        super().__init__(fn=lambda x: x, *args, **kwargs)
+    
+class StratifiedNLL(StratifiedMetric):
+    def __init__(self, eps, *args, **kwargs):
+        super().__init__(1, *args, **kwargs)
+        self.eps = eps
+    def evaluate_binned(self, binned_diff, binned_variance):
+        result = np.full((self.num_variables, self.num_bins), np.nan)
+        for i in range(self.num_variables):
+            for j in range(self.num_bins):
+                if binned_diff[i][j].shape==(0,) and binned_variance[i][j].shape==(0,): continue
+                result[i,j] = self.evaluate(binned_diff[i][j], binned_variance[i][j])
+        return result
+    def evaluate(self, diff, variance):
+        variance[variance<self.eps] = self.eps
+        return np.nanmean(0.5 * (np.log(variance) + (diff**2)/variance), axis=0)
+    def agg(self, histogram, *arrs):
+        axes = (1,2)
+        assert len(arrs)==1
+        return weighted_avg(arrs[0], histogram, axis=axes)
+
+# calibration metrics
+class StratifiedUCE(StratifiedMetric):
+    """
+    X[0]: mean_variance, X[1]: mean_mse
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(2, *args, **kwargs)
+    def evaluate_binned(self, binned_diff, binned_variance):
+        return reduce_binned(binned_variance, self.evaluate, "variance"), reduce_binned(binned_diff, self.evaluate, "diff")
+    def evaluate(self, values, variable):
+        if variable=="variance": return np.nanmean(values, axis=0)
+        elif variable=="diff": return np.nanmean(values**2, axis=0)
+        else: raise AttributeError(f"`variable` must be in ['variance', 'diff']. got '{variable}'")
+    def agg(self, histogram,*arrs):
+        assert len(arrs)==2
+        result = np.abs(np.nansum(histogram*(arrs[0]-arrs[1]), axis=self.groups_axis, keepdims=True))
+        result = np.nansum(result, axis=self.bins_axis, keepdims=True)/np.nansum(histogram, axis=(self.groups_axis,self.bins_axis), keepdims=True)
+        result = result.reshape(self.num_variables,)
+        return result
+
+class StratifiedENCE(StratifiedUCE):
+    """
+    X[0]: mean_std, X[1]: mean_rmse
+    """
+    def evaluate(self, *args, **kwargs):
+        return np.sqrt(super().evaluate(*args, **kwargs))
+    def agg(self, histogram, *arrs):
+        assert len(arrs)==2
+        result = np.sqrt(np.nansum(histogram*arrs[0], axis=self.groups_axis, keepdims=True))
+        result -= np.sqrt(np.nansum(histogram*arrs[1], axis=self.groups_axis, keepdims=True))
+        result = np.abs(result)/np.sqrt(np.nansum(histogram*arrs[0], axis=self.groups_axis, keepdims=True))
+        result = np.nansum(result, axis=self.bins_axis, keepdims=True)/np.nansum(histogram, axis=(self.groups_axis,self.bins_axis), keepdims=True)
+        result = result.reshape(self.num_variables,)
+        return result
+
+class StratifiedCIAccuracy(StratifiedMetric):
+    def __init__(self, rhos, *args, **kwargs):
+        super().__init__(1, *args, **kwargs)
+        self.rhos = rhos
+        self.num_rhos = len(rhos)
+        if self.num_rhos > 1:
+            self.X = np.nan*np.ones((self.num_tensors, self.num_variables, self.num_groups, self.num_bins, self.num_rhos), dtype=self.dtype)
+    def evaluate_binned(self, binned_diff, binned_variance):
+        # evaluate empirical acc for each variable, each bin and each confidence level
+        if self.num_rhos > 1: x = np.full((self.num_variables, self.num_bins, self.num_rhos), np.nan)
+        else: x = np.full((self.num_variables, self.num_bins), np.nan)
+        for i in range(self.num_variables):
+            for j in range(self.num_bins):
+                diff = binned_diff[i][j]
+                var = binned_variance[i][j]
+                x[i,j] = self.evaluate(diff, var)                    
+        if self.num_rhos > 1: return x
+        else: return x.reshape((self.num_variables, self.num_bins))
+    def evaluate(self, diff, var):
+        x = np.full((self.num_rhos), np.nan)
+        if len(diff)>0:
+            for k, rho in enumerate(self.rhos):
+                half_width = scipy.stats.norm.ppf((1+rho)/2)*np.sqrt(var)
+                acc = np.count_nonzero(np.abs(diff)<half_width, axis=0)/len(diff)
+                x[k] = acc
+        return x
+    def agg(self, histogram, *arrs):
+        assert len(arrs)==1
+        histogram = histogram[(...,*([np.newaxis]*(len(arrs[0].shape)-len(histogram.shape))))]
+        axes = (1,2)
+        return weighted_avg(arrs[0], histogram, axis=axes)
+    
+class StratifiedAUCE(StratifiedCIAccuracy):
+    def __init__(self, lo_rho, hi_rho, num_rhos, *args, **kwargs):
+        rhos = np.linspace(lo_rho, hi_rho, num_rhos)
+        super().__init__(rhos, *args, **kwargs)
+    def agg(self, histogram, *arrs):
+        empirical = super().agg(histogram, *arrs)
+        cerr = np.abs(self.rhos-empirical)
+        return np.nansum(cerr[...,1:]+cerr[...,:-1], axis=-1)/(2*self.num_rhos)
+
+# Usefulness metrics
+class StratifiedCv(StratifiedMetric):
+    """
+    X[0]: mean_std (mu), X[1]: var_std (sum((sigma-mu)^2))
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(2, *args, **kwargs)
+    def evaluate_binned(self, binned_variance):
+        mean_stds = np.full((self.num_variables, self.num_bins), np.nan)
+        var_stds = np.full((self.num_variables, self.num_bins), np.nan)
+        for i in range(self.num_variables):
+            for j in range(self.num_bins):
+                if binned_variance[i][j].shape!=(0,):
+                    mean_stds[i,j], var_stds[i,j] = self.evaluate(binned_variance[i][j])
+        return mean_stds, var_stds
+    def evaluate(self, var):
+        std = np.sqrt(var)
+        mean_std = np.nanmean(std, axis=0)
+        var_std = np.nansum((std-mean_std)**2, axis=0)
+        return mean_std, var_std
+    def agg(self, histogram, *arrs):
+        assert len(arrs)==2
+        axes = (1,2)
+        mu = weighted_avg(arrs[0], histogram, axis=axes, keepdims=True)
+        result = np.sqrt(np.nansum(arrs[1], axis=axes, keepdims=True)/(np.nansum(histogram, axis=axes, keepdims=True)-1))/mu
+        return result.reshape(self.num_variables,)
+    
+class StratifiedSRP(StratifiedMetric):
+    def __init__(self, *args, **kwargs):
+        super().__init__(1, *args, **kwargs)
+    def evaluate_binned(self, binned_variance):
+        return reduce_binned(binned_variance, reduce_fn=self.evaluate)
+    def evaluate(self, variance):
+        return np.nanmean(variance, axis=0)
+    def agg(self, histogram, *arrs):
+        assert len(arrs)==1
+        axes = (1,2)
+        return weighted_avg(arrs[0], histogram, axis=axes)
+    
+class StratifiedRCU:
+    def __init__(
+        self,
+        # shapes
+        num_variables: int, 
+        num_groups: int, 
+        num_bins: int,
+        # histogram
+        lo_variance: np.ndarray,
+        hi_variance: np.ndarray,
+        # NLL
+        eps_nll: float=1e-6,
+        # AUCE
+        lo_rho: float=1e-3,
+        hi_rho: float=1-1e-3,
+        num_rhos: int=100,
+    ):
+        self.num_variables = num_variables
+        shape_kw={"num_variables": num_variables, "num_groups": num_groups, "num_bins": num_bins}
+        # stratified tensors
+        self.histogram = StratifiedHistogram(lo_variance, hi_variance, **shape_kw)
+        self.mean_variance = StratifiedTensor(1, **shape_kw)
+        # stratified metrics
+        self.mse = StratifiedMSE(**shape_kw)
+        self.rmse = StratifiedRMSE(**shape_kw)
+        self.mae = StratifiedMAE(**shape_kw)
+        self.mbe = StratifiedMBE(**shape_kw)
+        self.nll = StratifiedNLL(eps_nll, **shape_kw)
+        self.uce = StratifiedUCE(**shape_kw)
+        self.ence = StratifiedENCE(**shape_kw)
+        self.ci90_accs = StratifiedCIAccuracy(rhos=[0.9], **shape_kw)
+        self.auce = StratifiedAUCE(lo_rho, hi_rho, num_rhos, **shape_kw)
+        self.cv = StratifiedCv(**shape_kw)
+        self.srp = StratifiedSRP(**shape_kw)
+        # other attributes
+        self.index_map = dict()
+        self.counter = 0
+
+    def metrics_tensors(self):
+        return dict(
+            mse=self.mse,
+            rmse=self.rmse,
+            mae=self.mae,
+            mbe=self.mbe,
+            nll=self.nll,
+            uce=self.uce,
+            ence=self.ence,
+            ci90_accs=self.ci90_accs,
+            auce=self.auce,
+            cv=self.cv,
+            srp=self.srp
+        )    
+    
+    def kwargs(self):
+        return dict(
+            histogram=self.histogram,
+            mean_variance=self.mean_variance,
+            index_map=self.index_map,
+            counter=self.counter,
+        )
+    
+    def __eq__(self, other):
+        for iterator in [self.metrics_tensors(), self.kwargs()]:
+            for attr_name, attr_value in iterator.items():
+                other_attr = other.__getattribute__(attr_name)
+                print(type(other_attr))
+                if type(other_attr)!=type(attr_value): 
+                    print("different types", attr_name)
+                    return False
+                if isinstance(attr_value, np.ndarray): 
+                    if not (attr_value==other_attr).all(): 
+                        print("different arrays", attr_name)
+                        return False
+                else:
+                    if attr_value!=other_attr: 
+                        print("different", type(attr_value), attr_name)
+                        return False
+        return True
+    
+    def empty_copy(self, k=1):
+        # retrieve constructor args
+        _, num_variables, num_groups, num_bins = self.histogram.shape
+        assert num_bins % k == 0, f"resampling factor must give an integer, i.e. `num_bins/k` must be an integer"
+        num_bins //= k
+        lo_variance, hi_variance = self.histogram.lo, self.histogram.hi
+        eps_nll = self.nll.eps
+        lo_rho, hi_rho, num_rhos = self.auce.rhos.min(), self.auce.rhos.max(), len(self.auce.rhos)
+        rcu = self.__class__(
+            num_variables, num_groups, num_bins,
+            lo_variance, hi_variance,
+            eps_nll,
+            lo_rho, hi_rho, num_rhos
+        )
+        return rcu
+    
+    def copy(self):
+        rcu = self.empty_copy(k=1)
+        for key, value in self.kwargs().items():
+            rcu.__setattr__(key, deepcopy(value))
+        for key, value in self.metrics_tensors().items():
+            rcu.__setattr__(key, deepcopy(value))
+        return rcu
+    
+    def upsample(self, k: int):
+        """
+        1. Compute bin mapping
+        2. upsample histogram -> sum joined bins
+        3. upsample metrics_tensors -> agg joined bins
+        4. (optional) upsample other useless tensors (e.g. mean_variance)
+        """
+        # create empty copy
+        rcu = self.empty_copy(k=k)
+        # compute
+        num_variables, num_groups, num_bins = rcu.histogram.shape
+        bin_map = [np.arange(i, i+k) for i in np.arange(0, num_bins, k)]
+        # upsample histogram
+        for i, bins in enumerate(bin_map):
+            rcu.histogram[:,:,i] = np.nansum(self.histogram[:,:,bins], axis=2)
+        # upsample metrics
+        for i, bins in enumerate(bin_map):
+            for metric, metric_tensor in self.metrics_tensors():
+                X = rcu.__getattribute__(metric)
+                X[:,:,i] = metric_tensor.agg(self.histogram[:,:,bins], *(metric_tensor.X[i,:,:,bins] for i in range(metric_tensor.num_tensors)))
+                rcu.__setattr__(metric, X)
+        # upsample mean_variance
+        for i, bins in enumerate(bin_map):
+            rcu.mean_variance[:,:,i] = weighted_avg(self.mean_variance[:,:,bins], self.histogram[:,:,bins], axis=2)
+        return rcu
+
+    def add_project(self, project_id: str, gt:np.ndarray, mean:np.ndarray, variance:np.ndarray):
+        # nan mask flattening
         mask = ~np.isnan(mean).all(0)
         diff = mean[:,mask]-gt[:,mask]
         variance = variance[:,mask]
-        self.diffs[project_id] = diff 
-        self.variances[project_id] = variance
-        # add group
-        for group_id, group in GROUPS.items(): 
-            if project_id in group: 
-                self.groups[group_id].append(project_id)
-
-    def fill_metrics(self, key, diff, variance):
-        mean_mses, mean_vars, histogram = binned_variance(diff, variance, self.n_bins)
-        all_kwargs = dict(diff=diff, variance=variance, n_bins=self.n_bins,
-                    mean_mses=mean_mses, mean_vars=mean_vars, 
-                    histogram=histogram, n_rho=self.n_rho,
-                    ause_m=self.ause_m, nll_eps=self.nll_eps,
-                    labels_mean=self.labels_mean, rho_min=self.rho_min,
-                    rho_max=self.rho_max)
-        self.metrics[key] = {
-            m: eval(m)(**all_kwargs)
-            for m in chain(self.uq_metrics, self.regression_metrics)
-        }
-        
-    def aggregate_entity(self, project_id=None, group_id=None, compute_intermediary=True):
-        assert not (project_id and group_id)
-        # single project
-        if project_id: entities, key = [project_id], project_id
-        # group
-        elif group_id: entities, key = self.groups[group_id], group_id
-        # global aggregation
-        else: entities, key = list(chain(*list(self.groups.values()))), "global"
-        print("Aggregating entity: {} -> {} ()".format(key, entities, self.metrics.keys()))
-        # compute only if not existing
-        if not key in self.metrics.keys() and len(entities)>0:
-            diff, variance = None, None
-            for pid in entities:
-                diff_, variance_ = self.diffs[pid] , self.variances[pid]
-                diff = diff_ if diff is None else np.concatenate([diff, diff_], axis=1)
-                variance = variance_ if variance is None else np.concatenate([variance, variance_], axis=1)
-                # compute intermediary if needed
-                if compute_intermediary and not pid in self.metrics.keys():
-                    print("Computing single entity: {}".format(pid))
-                    self.fill_metrics(pid, diff_.copy(), variance_.copy())
-            # compute entity metrics if not yet done
-            if len(entities)>1: self.fill_metrics(key, diff, variance)
-
-    def aggregate_all(self):
-        _ = self.aggregate_entity(compute_intermediary=True)
-        for group_id in GROUPS.keys(): _ = self.aggregate_entity(group_id=group_id, compute_intermediary=False)
-
-class OnlineRUQMetrics:
-    """
-    Online metrics:
-        - Error-based (mse, mae, rmse, mbe): E = (f(diff) + N*E)/(N+1); N+=1 (w/ diff=(gt-mu)**2)
-        - NLL                              : L = (l + 2*N*L)/(2*(N+1)); N+=1 (w/ l=log(var)+diff**2/var)
-        - binned variance-based (uce, ence): 
-            - Precompute a high resolution histogram: H_hi = {|B_hi(k)|: k=0,...,M_hi-1} between pred_var_max and pred_var_min (across all predicitions)
-            - When computing a metric, 
-                - Downsample to get *_lo(i), i=0,...,M_lo-1
-                    - Constant bin width: m = M_hi/M_lo
-                        - |B_lo(i)| = sum_{k=0,...,m-1}|B_hi(k+m*i)|
-                        - mean_x_lo(i) = 1/|B_lo(i)|*|sum_{k=0,...,m-1}|B_hi(k+m*i)|*mean_x_hi(i+m*k)
-                    - Almost constant bin density:
-                        - TODO
-                - Compute metric on downsampled arrays
-        - ause                             :
-            - Use the high resolution histogram. ause_m is used to select a number of bins to remove.
-            - Remove the required bins and compute the metric by unbinning (i.e. downsampling to n_bins=1) the remaining bins
-    """
-    def __init__(
-        self,
-        # High resolution binning
-        var_lo,
-        var_hi,
-        n_bins,
-        # NLL
-        nll_eps=1e-6,
-        # AUCE
-        n_rho=100,
-        rho_min=1e-3,
-        rho_max=1-1e-3,
-        # AUSE
-        ause_step=.05,
-    ):
-        self.var_lo = var_lo
-        self.var_hi = var_hi
-        self.n_bins = n_bins
-        self.nll_eps = nll_eps
-        self.n_rho = n_rho
-        self.rho_min = rho_min
-        self.rho_max = rho_max 
-        self.ause_step = ause_step
-        # accumulators
-        self.metrics = {}
-        self.counts = {}
-        self.bin_mses = {}
-        self.bin_vars = {}
-        self.histogram = {} # hi resolution histogram (lo resolution is computed on demand)
-        # internal global variables
-        self.error_metrics = ["mse", "mae", "rmse", "mbe"]
-        self.methods_suffix = ["errors", "nll", "ence", "auce", "r09", "c_v", "srp", "ause_rmse", "ause_uce"]
-        self.auce_rhos = np.linspace(rho_min, rho_max, n_rho)
-
-    def add(self, project_id, means, gt, variance):
-        assert means.shape == variance.shape == gt.shape
-        assert means.shape[0]==len(self.variable_names), f"arrays must be of shape (num_variables, num_samples)"
-        assert not project_id in self.metrics.keys(), f"{project_id} was already added"
-        self.metrics[project_id] = {}
-        # masked difference
-        mask = ~np.isnan(means).all(0)
-        diff = means[:,mask]-gt[:,mask] # (d,n)
-        variance = variance[:,mask] # (d,n)
-        # Counts
-        self.counts[project_id] = diff.shape[1]
-        # Binning
-        p_mean_mses, p_mean_vars, p_histogram = binned_variance(diff, variance, self.n_bins, self.var_lo, self.var_hi)
-        self.bin_mses[project_id] = p_mean_mses
-        self.bin_vars[project_id] = p_mean_vars
-        self.histogram[project_id] = p_histogram
-        # Error based metrics
-        self._add_errors(diff, self.metrics[project_id])
-        # NLL
-        self._add_nll(diff, variance, self.metrics[project_id])
-        # uce
-        self._add_uce(p_mean_mses, p_mean_vars, p_histogram, self.metrics[project_id])
-        # ence
-        p_mean_rmses = np.sqrt(p_mean_mses)
-        p_mean_stds = np.sqrt(p_mean_vars)
-        self._add_ence(p_mean_rmses, p_mean_stds, self.metrics[project_id])
-        # auce
-        self._add_auce(diff, variance, self.metrics[project_id])
-        # r09
-        self._add_r09(diff, variance, self.metrics[project_id])
-        # c_v
-        self._add_c_v(variance, self.metrics[project_id])
-        # srp
-        self._add_srp(variance, self.metrics[project_id])
-        # ause_rmse
-        # ause_uce
-
-    def agg(self, groups=GROUPS):
-        for group_id, group_keys in groups.items():
-            if not group_id in self.metrics.keys(): self.metrics[group_id] = {}
-            # Add count
-            self.counts[group_id] = np.stack([self.counts[k] for k in group_keys], axis=-1).sum(1)
-            # Apply aggregation
-            for method_suffix in self.methods_suffix:
-                eval(f"self._agg_{method_suffix}")(group_id, group_keys)
-
-    def resample_histogram(self, M_new, kind="linear"):
-        if kind == "linear":
-            raise NotImplementedError()
-        else:
-            raise ValueError(f"Invalid: kind={kind}")
-
-    # Errors
-    def _add_errors(self, diff, m_dict):
-        d = diff.shape[0]
-        for metric in self.error_metrics:
-            m_dict[metric] = eval(metric)(diff)
-            assert m_dict[metric].shape == (d,)
-
-    def _agg_errors(self, group_id, group_keys):
-        counts = np.stack([self.counts[k] for k in group_keys], axis=-1) # (d, P)
-        for metric in self.error_metrics:
-            errors = np.stack([self.metrics[k][metric] for k in group_keys], axis=-1) # (d, P) w. P: group size
-            self.metrics[group_id][metric] = weighted_avg(errors, counts, axis=1) # (d,)
-
-    # NLL
-    def _add_nll(self, diff, variance, m_dict):
-        d = diff.shape[0]
-        m_dict["nll"] = nll(diff, variance, self.nll_eps)
-        assert m_dict["nll"].shape == (d,)
-
-    def _agg_nll(self, group_id, group_keys):
-        losses = np.stack([self.metrics[k]["nll"] for k in group_keys], axis=-1) # (d, P) w. P: group size
-        counts = np.stack([self.counts[k] for k in group_keys], axis=-1) # (d, P)
-        self.metrics[group_id]["nll"] = weighted_avg(losses, counts, axis=1) # (d,)
-
-    # uce
-    def _add_uce(self, p_mean_mses, p_mean_vars, p_histogram, m_dict):
-        d, M = p_mean_mses.shape
-        assert M==self.n_bins 
-        m_dict["uce"] = uce(p_mean_mses, p_mean_vars, p_histogram)
-        assert m_dict["uce"].shape == (d,)
-
-    def _agg_uce(self, group_id, group_keys):
-        H = self.stack([self.histogram[k] for k in group_keys], axis=-1) # (d, M, P) w. M: n_bins, P: group size
-        bin_mses = self.stack([self.bin_mses[k] for k in group_keys], axis=-1) # (d, M, P)
-        bin_vars = self.stack([self.bin_vars[k] for k in group_keys], axis=-1) # (d, M, P)
-        counts = np.stack([self.counts[k] for k in group_keys], axis=-1) # (d, P)
-        assert counts.shape[0]==bin_mses.shape[0]==bin_vars.shape[0]==H.shape[0]
-        d = counts.shape[0]
-        assert (np.nansum(H,axis=2)==counts).all(), "unmatching histogram and counts"
-        assert (np.nansum(H,axis=(1,2))==np.nansum(counts,axis=1)).all(), "unmatching histogram and counts"
-        N = np.nansum(counts, axis=1)
-        value = bin_mses-bin_vars
-        value = H*value
-        value = np.nansum(value, axis=2)
-        value = np.abs(value)
-        value = np.nansum(value, axis=1) / N
-        assert value.shape == (d,)
-        self.metrics[group_id]["uce"] = value
-
-    # ence
-    def _add_ence(self, p_mean_rmses, p_mean_stds, m_dict):
-        d, M = p_mean_rmses.shape
-        assert M==self.n_bins
-        m_dict["ence"] = ence(p_mean_rmses, p_mean_stds)
-        assert m_dict["ence"].shape == (d,)
-
-    def _agg_ence(self, group_id, group_keys):
-        H = self.stack([self.histogram[k] for k in group_keys], axis=-1) # (d, M, P) w. M: n_bins, P: group size
-        bin_mses = self.stack([self.bin_mses[k] for k in group_keys], axis=-1) # (d, M, P)
-        bin_vars = self.stack([self.bin_vars[k] for k in group_keys], axis=-1) # (d, M, P)
-        counts = np.stack([self.counts[k] for k in group_keys], axis=-1) # (d, P)
-        assert counts.shape[0]==bin_mses.shape[0]==bin_vars.shape[0]==H.shape[0]
-        d = counts.shape[0]
-        assert (np.nansum(H,axis=2)==counts).all(), "unmatching histogram and counts"
-        assert (np.nansum(H,axis=(1,2))==np.nansum(counts,axis=1)).all(), "unmatching histogram and counts"
-        N = np.nansum(counts, axis=1)
-        value = np.sqrt(np.nansum(H*bin_vars, axis=2))
-        value -= np.sqrt(np.nansum(H*bin_mses, axis=2))
-        value /= np.sqrt(np.nansum(H*bin_vars, axis=2))
-        value = np.nansum(value, axis=1)/N 
-        assert value.shape == (d,)
-        self.metrics[group_id]["ence"] = value
-
-    # auce
-    def _add_auce(self, diff, variance, m_dict):
-        d = diff.shape[0]
-        ause_rhos = np.linspace(self.rho_min, self.rho_max, self.n_rho) # (d,)
-        auce_, empirical_accs = auce(diff, variance, ause_rhos, return_accs=True)
-        assert auce_.shape == (d,)
-        assert empirical_accs.shape[0] == d
-        m_dict["empirical_accs"] = empirical_accs
-        m_dict["auce"] = auce_
-
-    def _agg_auce(self, group_id, group_keys):
-        empirical_accs = np.stack([self.metrics[k]["empirical_accs"] for k in group_keys], axis=1) # (d, P, n_rho) w. P: group size
-        counts = np.expand_dims(np.stack([self.counts[k] for k in group_keys], axis=-1), axis=-1) # (d, P, 1)
-        empirical_accs = weighted_avg(empirical_accs, counts, axis=1) # (d, n_rho)
-        d = counts.shape[0]
-        expected_accs = np.stack([np.linspace(self.rho_min, self.rho_max, self.n_rho)]*d, axis=0)
-        assert expected_accs.shape==empirical_accs.shape
-        self.metrics[group_id]["auce"] = area_under_spline(x=expected_accs, y=np.abs(expected_accs-empirical_accs))
+        # index
+        self.index_map[project_id] = self.counter
+        index = self.index_map[project_id]
+        # add histogram
+        p_variance, binned_variance, [binned_diff] = self.histogram.add(index, variance, others=[diff])
+        # add mean variance
+        self.mean_variance.add(index, p_variance)
+        # add metrics
+        for metric_name, metric in self.metrics_tensors().items():
+            print(f"[rcu] adding {metric.__class__.__name__} for {project_id}")
+            # get metric kwargs
+            kwargs = {
+                k:v for k,v in list(self.kwargs().items())+[("binned_variance", binned_variance),("binned_diff", binned_diff),("counts", self.histogram[:,index,:])]
+                if k in filter(lambda x: x!="self", inspect.getfullargspec(metric.evaluate_binned).args)
+            }
+            # add metric
+            metric.add(index, **kwargs)
+        self.counter += 1
     
-    # r09
-    def _add_r09(self, diff, variance, m_dict):
-        d = diff.shape[0]
-        m_dict["r09"] = r09(diff, variance)
-        assert m_dict["r09"].shape[0]==(d,)
+    def get(self, metric_names: Optional[List[str]]=None):
+        """eg rcu.get(["mse", "mbe"])"""
+        # get metrics
+        if metric_names is None: metric_names = list(self.metrics_tensors().keys())
+        metrics = [self.metrics_tensors()[mid] for mid in metric_names]
+        # compute
+        results = {}
+        for metric, metric_name in zip(metrics, metric_names):
+            print(f"[rcu] getting {metric.__class__.__name__} globally")
+            res = metric.get(self.histogram)
+            for k, v in res.items():
+                res[k] = v.reshape(self.num_variables)
+            results[metric_name] = res
+        return results
 
-    def agg_r09(self, group_id, group_keys):
-        empirical_accs = np.stack([self.metrics[k]["empirical_accs"] for k in group_keys], axis=1) # (d, P) w. P: group size
-        counts = np.expand_dims(np.stack([self.counts[k] for k in group_keys], axis=-1), axis=-1) # (d, P)
-        self.metrics[group_id]["r09"] = weighted_avg(empirical_accs, counts)
+    def get_subset(self, project_ids: Optional[List[str]]=None, metric_names: Optional[List[str]]=None):
+        """eg rcu.get_subset(EAST, ["mse", "uce"])"""
+        assert project_ids is None or isinstance(project_ids, list)
+        assert metric_names is None or isinstance(metric_names, list)
+        if metric_names is None: metric_names = list(self.metrics_tensors().keys())
+        # get indexes and metrics
+        indexes = self.index_map.values() if project_ids is None else [self.index_map[pid] for pid in project_ids]
+        metrics = [self.metrics_tensors()[mid] for mid in metric_names]
+        # compute
+        results = {}
+        for metric, metric_name in zip(metrics, metric_names):
+            print(f"[rcu] getting {metric.__class__.__name__} for {project_ids}")
+            res =  metric.get_subset(self.histogram, indexes)
+            for k, v in res.items():
+                res[k] = v.reshape(self.num_variables)
+            results[metric_name] = res
+        return results
 
-    # ause_x
-    def _add_ause_x(self, variance, x, arr_dict, m_dict):
-        d = variance.shape[0]
-        scurve = sparsification_curve_x(variance, x, arr_dict)
-        m_dict[f"ause_{x.__name__}"] = ause(*scurve)
-        assert m_dict[f"ause_{x.__name__}"].shape == (d,)
-    def _agg_ause_x(self, variance, x, arr_dict): pass
-
-    # c_v
-    def _add_c_v(self, variance, m_dict):
-        d = variance.shape[0]
-        std = np.sqrt(variance) # (d,n)
-        mean_std = std.mean(1) # (d,)
-        m_dict["c_v_mean_std"] = mean_std
-        m_dict["c_v"] = c_v(std, mean_std) # (d,)
-        assert m_dict["c_v"].shape == (d,)
-
-    def _agg_c_v(self, group_id, group_keys):
-        m_stds = np.stack([self.metrics[k]["c_v_mean_std"] for k in group_keys], axis=-1) # (d, P) w. P: group size
-        c_vs = np.stack([self.metrics[k]["c_v"] for k in group_keys], axis=-1) # (d, P)
-        counts = np.stack([self.counts[k] for k in group_keys], axis=-1) # (d, P)
-        m_std = weighted_avg(m_stds, counts, axis=1)
-        self.metrics[group_id]["c_v_mean_std"] = m_std
-        self.metrics[group_id]["c_v"] = np.sqrt(c_vs**2*m_stds**2*(counts-1)/((counts.sum(1)-1)))/m_std
-
-    # srp
-    def _add_srp(self, variance, m_dict):
-        d = variance.shape[0]
-        m_dict["srp"] = srp(variance)
-        assert m_dict["srp"].shape == (d,)
-
-    def _agg_srp(self, group_id, group_keys):
-        srps = np.stack([self.metrics[k]["srp"] for k in group_keys], axis=-1) # (d, P) w. P: group size
-        counts = np.stack([self.counts[k] for k in group_keys], axis=-1) # (d, P)
-        self.metrics[group_id]["srp"] = weighted_avg(srps, counts, axis=1) # (d,)
-
-def main(N_projects):
-    from pathlib import Path
-    import rasterio
-    import json
-
-    PREDICTIONS_DIR = Path("results/dev/2023-03-14_15-45-23")
-    PKL_DIR = Path('data/pkl/2021-05-18_10-57-45')
-    GT_DIR = Path('data/preprocessed')
-
-    with (PKL_DIR / 'stats.yaml').open() as fh:
-        # load training set statistics for data normalization
-        stats = yaml.safe_load(fh)
-        labels_mean = np.array(stats['labels_mean'])
-
-    ruq_metrics = RUQMetrics(n_bins=20, labels_mean=labels_mean)
-
-    i = 0
-    for mean_file in PREDICTIONS_DIR.glob("*_mean.tif"):
-        project = mean_file.stem.split("_")[0]
-        if project not in GLOBAL:
-            continue
-        with rasterio.open(mean_file) as fh:
-            mean = fh.read(fh.indexes) #/np.expand_dims(labels_mean, axis=(1,2))
-        with rasterio.open(PREDICTIONS_DIR / (project + '_variance.tif')) as fh:
-            variance = fh.read(fh.indexes) #/np.expand_dims(labels_mean, axis=(1,2))
-        with rasterio.open(GT_DIR / (project + '.tif')) as fh:
-            gt = fh.read(fh.indexes)
-            gt_mask = fh.read_masks(1).astype(bool) 
-        print(f"Adding {project}")
-        ruq_metrics.add_project(project, mean, variance, gt)
-        i += 1
-        if i==N_projects: break
-        
-    ruq_metrics.aggregate_all()
-    for entity, em in ruq_metrics.metrics.items():
-        print(f"{entity}:")
-        for m, vs in em.items():
-            print(f"    {m}: {', '.join(['{:.3f}'.format(v) for v in vs])}")
- 
-def test(d=2, verbose=True):
-    # dims
-    d, N = (d,30)
-    # params
-    nll_eps = 1e-10
-    n_bins = 2
-    n_rho = 3
-    rho_min = 1e-3
-    rho_max = 1-1e-3
-    rho = np.linspace(rho_min, rho_max, n_rho)
-    nd_rho = np.stack([rho]*d, axis=0)
-    ause_m = .5
-    # generate data
-    eps = 10*np.random.randn(d,1)
-    gt = np.random.randn(d, N)
-    mean = gt + eps
-    variance = np.concatenate([np.exp(1)*np.ones((d, int(N/2))), np.exp(2)*np.ones((d, int(N/2)))], axis=1)
-    assert (variance>nll_eps).all()
-    var_min = np.exp(1)*np.ones((d,1))
-    var_max = np.exp(2)*np.ones((d,1))
-    std_min = np.sqrt(var_min)
-    std_max = np.sqrt(var_max)
-    std_mean = (std_min+std_max)/2
-    labels_mean = 2*np.ones((d, 1))
-    # binning
-    true_binning = np.array([eps**2, eps**2]).squeeze(-1).transpose(), np.concatenate([var_min, var_max], axis=1), np.array([[N/2, N/2]]*d)
-    pred_binning = binned_variance(mean-gt, variance, n_bins)
-    if verbose:
-        for name, true, pred in zip(["mean_mses", "mean_vars", "histogram"], true_binning, pred_binning):
-            print("[{}: {}] target={}, computed={}".format(name, np.allclose(pred, true), list(true), list(pred)))
-    # compute metrics
-    ruq = RUQMetrics(n_bins=n_bins, labels_mean=labels_mean, nll_eps=nll_eps, 
-                     rho_min=rho_min, rho_max=rho_max, n_rho=n_rho, ause_m=ause_m,
-                     variable_names=["dumb"]*d)
-    ruq.add_project(project_id=EAST[0], mean=mean, variance=variance, gt=gt)
-    ruq.aggregate_entity(EAST[0])
-    # gt metrics
-    expected_accs = 0.5*(
-        (np.abs(eps)<scipy.stats.norm.ppf((1+rho)/2)*np.sqrt(var_min)).astype(np.float32) + \
-        (np.abs(eps)<scipy.stats.norm.ppf((1+rho)/2)*np.sqrt(var_max)).astype(np.float32)
-    )
-    gt_metrics = dict(
-        mse = eps**2,
-        mae = np.abs(eps),
-        rmse = np.abs(eps),
-        mbe = eps,
-        nll = 1/4*(3+eps**2*(1/var_min+1/var_max)),
-        uce = 0.5*(np.abs(var_min-eps**2)+np.abs(var_max-eps**2)),
-        ence = (np.abs(var_min-eps**2)/var_min+np.abs(var_max-eps**2)/var_max)/N,
-        auce = area_under_spline(nd_rho, np.abs(nd_rho-expected_accs)),
-        r09 = 0.5*(
-            (np.abs(eps)<scipy.stats.norm.ppf((1+.9)/2)*np.sqrt(var_min)).astype(np.float32) + \
-            (np.abs(eps)<scipy.stats.norm.ppf((1+.9)/2)*np.sqrt(var_max)).astype(np.float32)
-        ),
-        c_v = np.sqrt(N*(std_max-std_min)**2/(4*(N-1)))/std_mean,
-        srp = (var_min+var_max)/2,
-        ause_rmse = area_under_spline(
-            x=np.stack([np.arange(0,1+ause_m,ause_m)]*d, axis=0),
-            y=np.stack([
-                np.zeros((d,1)),
-                np.abs(eps),
-                np.abs(eps)
-            ], axis=1).squeeze(-1)
-        ),
-        ause_uce = area_under_spline(
-            x=np.stack([np.arange(0,1+ause_m,ause_m)]*d, axis=0),
-            y=np.stack([
-                np.zeros((d,1)),
-                np.abs(var_min-eps**2),
-                (np.abs(var_min-eps**2)+np.abs(var_max-eps**2))/2
-            ], axis=1).squeeze(-1)
-        )
-    )
-    # compare
-    results = {}
-    for k in gt_metrics.keys():
-        gtm = gt_metrics[k] if len(gt_metrics[k].shape)==1 else gt_metrics[k].squeeze(1)
-        rum = ruq.metrics[EAST[0]][k]
-        if verbose: print("[{}: {}] target={}, computed={}, diff={}, ratio={}".format(k, np.allclose(gtm, rum), gtm, rum, list(gtm-rum), list(gtm/rum)))
-        results[k] = {"same": np.allclose(gtm, rum), "error": list(gtm-rum)}
-    return results
-
-def multi_test():
-    import json
-    all_results = []
-    num_runs = 10
-    for _ in range(num_runs):
-        for d in range(2, 10, 1):
-            all_results.append(test(d, False))
-    same_dict = {k: True for k in all_results[0].keys()}
-    for results in all_results:
-        for k in results.keys():
-            same_dict[k] = results[k]["same"] and same_dict[k]
-    print(json.dumps(same_dict, indent=2))
-
-if __name__ == "__main__": 
-    # main(2)
-    multi_test()
+class StratifiedRCUSubset(StratifiedRCU):
+    def __init__(self, metric_names, *args, **kwargs):
+        self.metric_names = metric_names
+        super().__init__(*args, **kwargs)
+    def metrics_tensors(self):
+        return {k:v for k,v in super().metrics_tensors().items() if k in self.metric_names}

@@ -7,7 +7,7 @@ import yaml
 import numpy as np
 from tqdm import tqdm
 from pathlib import Path
-from rcu_metrics import StratifiedRCU
+from metrics import StratifiedRCU
 
 def _path(x):
     try:
@@ -93,6 +93,7 @@ def main():
         # standardize meanH and p95
         mean[[0,1]] = (mean[[0,1]]-labels_mean[[0,1]])/labels_std[[0,1]]
         gt[[0,1]] = (gt[[0,1]]-labels_mean[[0,1]])/labels_std[[0,1]]
+        variance /= labels_std**2
         # add project
         rcu.add_project(project, gt, mean, variance)
         # get project metrics
