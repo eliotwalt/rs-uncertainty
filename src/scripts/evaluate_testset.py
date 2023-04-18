@@ -53,8 +53,7 @@ def main():
     lo_variance = np.full((5,), np.inf)
     hi_variance = np.full((5,), -np.inf)
     variance_files = []
-    # for variance_file in tqdm(list(cfg["prediction_dir"].glob("*_variance.tif"))):
-    for variance_file in tqdm(list(cfg["prediction_dir"].glob("*_variance.tif"))[:3]): # Debug
+    for variance_file in tqdm(list(cfg["prediction_dir"].glob("*_variance.tif"))):
         if variance_file.stem.split("_")[0] not in projects: continue
         variance_files.append(variance_file)
         with rasterio.open(variance_file) as fh:
@@ -70,8 +69,7 @@ def main():
     print("Initiating StratifiedRCU object...")
     rcu = StratifiedRCU(
         num_variables=len(cfg["data_bands"]),
-        # num_groups=len(projects),
-        num_groups=3, # Debug
+        num_groups=len(variance_files),
         num_bins=cfg["num_bins"],
         lo_variance=lo_variance,
         hi_variance=hi_variance
@@ -91,27 +89,17 @@ def main():
             gt[2] /= 100 # Cover/Dens normalization!!
             gt[4] /= 100
         # standardize meanH and p95
-        mean[[0,1]] = (mean[[0,1]]-labels_mean[[0,1]])/labels_std[[0,1]]
-        gt[[0,1]] = (gt[[0,1]]-labels_mean[[0,1]])/labels_std[[0,1]]
-        variance /= labels_std**2
+        if cfg["normalize_mean"]:
+            mean[[0,1]] = (mean[[0,1]]-labels_mean[[0,1]])/labels_std[[0,1]]
+            gt[[0,1]] = (gt[[0,1]]-labels_mean[[0,1]])/labels_std[[0,1]]
+        if cfg["normalize_variance"]:
+            variance /= labels_std**2
         # add project
         rcu.add_project(project, gt, mean, variance)
-        # get project metrics
-        results[project] = rcu.get_subset([project])
-    # compute regions
-    # print(f"Aggregegating metrics...")
-    # for region in ["east", "west", "north"]:
-    #     region_projects = cfg[f"projects_{region}"]
-    #     results[region] = rcu.get_subset(region_projects) # Debug
-    # compute all
-    print(f"Aggregating across all projects...")
-    results["global"] = rcu.get()
-    # write results
-    # res_file = pjoin(cfg["prediction_dir"], "metrics.yaml")
-    res_file = Path("ignore.debug-eval.metrics.yaml")
-    print(f"writing results to {res_file}...")
-    with res_file.open("w", encoding="utf-8") as f:
-        yaml.dump(results, f, sort_keys=False)
-    print("Done.")
+    rcu.get_results_df(
+        groups={"east": cfg["projects_east"], "west": cfg["projects_west"], "north": cfg["projects_north"]},
+        variable_names=cfg["variable_names"]
+    )
+    rcu.save_json(pjoin(cfg["prediction_dir"], "rcu.json"))
 
 if __name__ == "__main__": main()

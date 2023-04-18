@@ -1,9 +1,16 @@
 import numpy as np
 import inspect
+import json
 import scipy.stats
 from itertools import chain
 from typing import *
+from math import ceil
 from copy import deepcopy
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+sns.set()
+sns.set_style("whitegrid")
 
 # Utils
 def arrequal(a, b):
@@ -136,6 +143,10 @@ class StratifiedMetric(StratifiedTensor):
     def agg(self, *args, **kwargs): 
         """aggregate (d,P,M)->(d,) if not keepbins else (d,P,M)->(d,M)"""
         raise NotImplementedError()
+
+    def agg_tensor(self, H, bins):
+        X = self.X[...,bins]
+        return weighted_avg(X, H, axis=-1, keepdims=True)
     
     def cumagg(self, histogram, *arrs):
         cummetric = np.nan*np.ones((self.num_variables, self.num_bins))
@@ -234,7 +245,8 @@ class StratifiedUCE(StratifiedMetric):
         assert len(arrs)==2
         result = np.abs(np.nansum(histogram*(arrs[0]-arrs[1]), axis=self.groups_axis, keepdims=True))
         result = np.nansum(result, axis=self.bins_axis, keepdims=True)/np.nansum(histogram, axis=(self.groups_axis,self.bins_axis), keepdims=True)
-        result = result.reshape(self.num_variables,)
+        result = result.reshape(self.num_variables,-1)
+        if result.shape[-1]==1: result.reshape(self.num_variables)
         return result
 
 class StratifiedENCE(StratifiedUCE):
@@ -249,7 +261,8 @@ class StratifiedENCE(StratifiedUCE):
         result -= np.sqrt(np.nansum(histogram*arrs[1], axis=self.groups_axis, keepdims=True))
         result = np.abs(result)/np.sqrt(np.nansum(histogram*arrs[0], axis=self.groups_axis, keepdims=True))
         result = np.nansum(result, axis=self.bins_axis, keepdims=True)/np.nansum(histogram, axis=(self.groups_axis,self.bins_axis), keepdims=True)
-        result = result.reshape(self.num_variables,)
+        result = result.reshape(self.num_variables,-1)
+        if result.shape[-1]==1: result.reshape(self.num_variables)
         return result
 
 class StratifiedCIAccuracy(StratifiedMetric):
@@ -292,6 +305,12 @@ class StratifiedAUCE(StratifiedCIAccuracy):
         empirical = super().agg(histogram, *arrs)
         cerr = np.abs(self.rhos-empirical)
         return np.nansum(cerr[...,1:]+cerr[...,:-1], axis=-1)/(2*self.num_rhos)
+    def agg_tensor(self, H, bins):
+        hshape = H.shape
+        X = self.X[...,bins,:]
+        H = np.expand_dims(H, axis=-1)
+        result = weighted_avg(X, H, axis=-2, keepdims=True)
+        return result
 
 # Usefulness metrics
 class StratifiedCv(StratifiedMetric):
@@ -348,6 +367,7 @@ class StratifiedRCU:
         lo_rho: float=1e-3,
         hi_rho: float=1-1e-3,
         num_rhos: int=100,
+        verbose: bool=False,
     ):
         self.num_variables = num_variables
         shape_kw={"num_variables": num_variables, "num_groups": num_groups, "num_bins": num_bins}
@@ -369,6 +389,8 @@ class StratifiedRCU:
         # other attributes
         self.index_map = dict()
         self.counter = 0
+        self.results = None
+        self.verbose=verbose
 
     def metrics_tensors(self):
         return dict(
@@ -397,24 +419,26 @@ class StratifiedRCU:
         for iterator in [self.metrics_tensors(), self.kwargs()]:
             for attr_name, attr_value in iterator.items():
                 other_attr = other.__getattribute__(attr_name)
-                print(type(other_attr))
-                if type(other_attr)!=type(attr_value): 
-                    print("different types", attr_name)
+                if type(other_attr)!=type(attr_value):
+                    print(attr_name, "failed for type mismatch", type(other_attr),type(attr_value))
                     return False
                 if isinstance(attr_value, np.ndarray): 
-                    if not (attr_value==other_attr).all(): 
-                        print("different arrays", attr_name)
+                    if not arrequal(attr_value,other_attr): 
+                        print(attr_name, "failed for array notequal mismatch")
+                        return False
+                if isinstance(attr_value, StratifiedMetric) or isinstance(attr_value, StratifiedTensor):
+                    if not arrequal(attr_value.X,other_attr.X):
+                        print(attr_name, "failed for stratified array notequal mismatch")
                         return False
                 else:
                     if attr_value!=other_attr: 
-                        print("different", type(attr_value), attr_name)
                         return False
         return True
-    
+
     def empty_copy(self, k=1):
         # retrieve constructor args
         _, num_variables, num_groups, num_bins = self.histogram.shape
-        assert num_bins % k == 0, f"resampling factor must give an integer, i.e. `num_bins/k` must be an integer"
+        assert num_bins % k == 0, f"resampling factor must give an integer, i.e. `num_bins/k` must be an integer got: {num_bins}/{k}={num_bins/k}"
         num_bins //= k
         lo_variance, hi_variance = self.histogram.lo, self.histogram.hi
         eps_nll = self.nll.eps
@@ -433,32 +457,90 @@ class StratifiedRCU:
             rcu.__setattr__(key, deepcopy(value))
         for key, value in self.metrics_tensors().items():
             rcu.__setattr__(key, deepcopy(value))
+        if isinstance(self.results, pd.DataFrame):
+            rcu.results = self.results.copy()
         return rcu
-    
-    def upsample(self, k: int):
-        """
-        1. Compute bin mapping
-        2. upsample histogram -> sum joined bins
-        3. upsample metrics_tensors -> agg joined bins
-        4. (optional) upsample other useless tensors (e.g. mean_variance)
-        """
-        # create empty copy
+
+    def save_json(self, path):
+        def type_serialize(x):
+            if isinstance(x, np.ndarray): return (x.tolist(), "array")
+            elif isinstance(x, StratifiedTensor): return (x.X.tolist(), "array") 
+            else: return (x, None)
+        _, num_variables, num_groups, num_bins = self.histogram.shape
+        lo_variance, hi_variance = self.histogram.lo, self.histogram.hi
+        eps_nll = self.nll.eps
+        lo_rho, hi_rho, num_rhos = self.auce.rhos.min(), self.auce.rhos.max(), len(self.auce.rhos)
+        data = {
+            "attributes": {
+                "num_variables": num_variables,
+                "num_groups": num_groups,
+                "num_bins": num_bins,
+                "lo_variance": lo_variance,
+                "hi_variance": hi_variance,
+                "eps_nll": eps_nll,
+                "lo_rho": lo_rho,
+                "hi_rho": hi_rho,
+                "num_rhos": num_rhos,
+                "verbose": self.verbose
+            },
+            "metrics_tensors": {
+                metric_name: metric_tensor
+                for metric_name, metric_tensor in self.metrics_tensors().items()
+            },
+            "kwargs": {
+                kwarg_name: kwarg_value
+                for kwarg_name, kwarg_value in self.kwargs().items()
+            },
+            "results": self.results.to_dict() if isinstance(self.results, pd.DataFrame) else None
+        }
+        for upper_key in data.keys():
+            for lower_key, lower_value in data[upper_key].items():
+                data[upper_key][lower_key] = type_serialize(lower_value)
+        with open(path, mode="w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4)
+
+    @classmethod 
+    def from_json(cls, path):
+        def type_deserialize(x):
+            x, tp = x
+            if tp == "array": return np.array(x)
+            else: return x
+        with open(path, mode="r", encoding="utf-8") as f:
+            data = json.load(f)
+            for upper_key in data.keys():
+                if upper_key == "results": data[upper_key] = pd.from_dict(data[upper_key])
+                else:
+                    for lower_key, lower_value in data[upper_key].items():
+                        data[upper_key][lower_key] = type_deserialize(lower_value)
+        obj = cls(**data["attributes"])
+        for metric_name, metric_tensor in data["metrics_tensors"].items():
+            obj.metrics_tensors()[metric_name].__setattr__("X", np.array(metric_tensor))
+        for kwarg_name, kwarg_value in data["kwargs"].items():
+            if isinstance(kwarg_value, list): kwarg_value = np.array(kwarg_value)
+            if isinstance(obj.kwargs()[kwarg_name], StratifiedTensor):
+                obj.kwargs()[kwarg_name].__setattr__("X", kwarg_value)
+            else: obj.__setattr__(kwarg_name, kwarg_value)
+        return obj
+
+    def upsample(self, k:int):
+        # Create empty copy with num_bins = self.num_bins//k
         rcu = self.empty_copy(k=k)
-        # compute
-        num_variables, num_groups, num_bins = rcu.histogram.shape
-        bin_map = [np.arange(i, i+k) for i in np.arange(0, num_bins, k)]
+        # shapes
+        _, num_variables, num_groups, num_bins = rcu.histogram.shape
+        _, _, _, hi_num_bins = self.histogram.shape
+        assert num_bins>1, f"upsampled StratifiedRCU requires more than 1 bin. Decrease k"
+        # bin map
+        bin_map = [np.arange(i, i+k) for i in np.arange(0, hi_num_bins, k)]
         # upsample histogram
         for i, bins in enumerate(bin_map):
-            rcu.histogram[:,:,i] = np.nansum(self.histogram[:,:,bins], axis=2)
+            hi_histogram = self.histogram[...,bins]
+            rcu.histogram.X[...,i] = np.nansum(hi_histogram, axis=-1)
+            rcu.mean_variance.X[...,i] = weighted_avg(self.mean_variance[...,bins], hi_histogram, axis=-1)
         # upsample metrics
-        for i, bins in enumerate(bin_map):
-            for metric, metric_tensor in self.metrics_tensors():
-                X = rcu.__getattribute__(metric)
-                X[:,:,i] = metric_tensor.agg(self.histogram[:,:,bins], *(metric_tensor.X[i,:,:,bins] for i in range(metric_tensor.num_tensors)))
-                rcu.__setattr__(metric, X)
-        # upsample mean_variance
-        for i, bins in enumerate(bin_map):
-            rcu.mean_variance[:,:,i] = weighted_avg(self.mean_variance[:,:,bins], self.histogram[:,:,bins], axis=2)
+        for metric_name, metric_tensor in rcu.metrics_tensors().items():
+            hi_metric_tensor = self.metrics_tensors()[metric_name]
+            for i, bins in enumerate(bin_map):
+                metric_tensor.X[:,:,:,[i]] = hi_metric_tensor.agg_tensor(self.histogram[...,bins], bins)
         return rcu
 
     def add_project(self, project_id: str, gt:np.ndarray, mean:np.ndarray, variance:np.ndarray):
@@ -475,10 +557,10 @@ class StratifiedRCU:
         self.mean_variance.add(index, p_variance)
         # add metrics
         for metric_name, metric in self.metrics_tensors().items():
-            print(f"[rcu] adding {metric.__class__.__name__} for {project_id}")
+            if self.verbose: print(f"[rcu] adding {metric.__class__.__name__} for {project_id}")
             # get metric kwargs
             kwargs = {
-                k:v for k,v in list(self.kwargs().items())+[("binned_variance", binned_variance),("binned_diff", binned_diff),("counts", self.histogram[:,index,:])]
+                k:v for k,v in list(self.kwargs().items())+[("binned_variance", binned_variance),("binned_diff", binned_diff),("counts", self.histogram[:,:,index,:])]
                 if k in filter(lambda x: x!="self", inspect.getfullargspec(metric.evaluate_binned).args)
             }
             # add metric
@@ -493,7 +575,7 @@ class StratifiedRCU:
         # compute
         results = {}
         for metric, metric_name in zip(metrics, metric_names):
-            print(f"[rcu] getting {metric.__class__.__name__} globally")
+            if self.verbose: print(f"[rcu] getting {metric.__class__.__name__} globally")
             res = metric.get(self.histogram)
             for k, v in res.items():
                 res[k] = v.reshape(self.num_variables)
@@ -511,12 +593,155 @@ class StratifiedRCU:
         # compute
         results = {}
         for metric, metric_name in zip(metrics, metric_names):
-            print(f"[rcu] getting {metric.__class__.__name__} for {project_ids}")
+            if self.verbose: print(f"[rcu] getting {metric.__class__.__name__} for {project_ids}")
             res =  metric.get_subset(self.histogram, indexes)
             for k, v in res.items():
                 res[k] = v.reshape(self.num_variables)
             results[metric_name] = res
         return results
+
+    def get_results_df(self, groups: Dict[str, List[str]], variable_names: List[str]):
+        """
+        Columns:
+        - group:    [project_id], [group_id], global
+        - metric:   mse, ..., srp
+        - kind:     agg, ause
+        - variable: p95, ..., cover
+        - x:        value 
+        """
+        def add_result_dict(res, out, group):
+            # metric loop
+            for metric, mres in res.items():
+                # agg/ause loop
+                for kind, key in zip(["agg", "ause"], ["values", "ause"]):
+                    # numbers loop
+                    for i, x in enumerate(mres[key]):
+                        out["group"].append(group)
+                        out["metric"].append(metric)
+                        out["kind"].append(kind)
+                        out["variable"].append(variable_names[i])
+                        out["x"].append(x)
+            return out
+        results = {"group": [], "metric": [], "kind": [], "variable": [], "x": []}
+        for project_id in self.index_map.keys():
+            res = self.get_subset([project_id])
+            results = add_result_dict(res, results, project_id)
+        for group_name, group_ids in groups.items():
+            group_ids = list(filter(lambda x: x in self.index_map.keys(), group_ids))
+            res = self.get_subset(group_ids)
+            results = add_result_dict(res, results, group_name)
+        res = self.get()
+        results = add_result_dict(res, results, "global")
+        self.results = pd.DataFrame(results)
+
+    def plot_results(self):
+        if not isinstance(self.results, pd.DataFrame):
+            raise TypeError(f"`StratifiedRCU.results` is None. `StratifiedRCU.get_results_df` must be called before plotting")
+        groups = ["global"] + list(filter(
+            lambda x: not x in self.index_map.keys() and x != "global",
+            self.results.group.unique()
+        ))
+        for variable in self.results.variable.unique():
+            df = self.results[self.results.variable==variable]
+            nrows = ceil(len(df.metric.unique()))
+            ncols = ceil(len(df.metric.unique())/nrows)
+            fig, axs = plt.subplots(nrows=nrows, ncols=ncols, figsize=(12,25))
+            fig.suptitle(variable)
+            axs = axs.flatten()
+            for i, metric in enumerate(df.metric.unique()):
+                tmp = df[df.metric==metric]
+                tmp2 = tmp[tmp.group.isin(self.index_map.keys())]
+                tmp2 = tmp2.query(f"kind == 'agg'")
+                order = groups+list(tmp2.sort_values(by=["x"]).group)
+                sns.barplot(data=tmp, y="x", x="group", hue="kind", errorbar=None, ax=axs[i], order=order)
+                for tick in axs[i].get_xticklabels():
+                    tick.set_rotation(45)
+                axs[i].set(xlabel="", ylabel="value")
+                axs[i].set_title(metric.upper())
+                axs[i].legend(loc='upper right')
+            plt.tight_layout()
+            fig.show()
+
+    def get_calibration_curve(self, metric: str):
+        metric = metric.lower()
+        assert metric in ["uce", "ence", "auce"], f"{metric} is not suitable to extract a calibration curve"
+        if metric in ["uce", "ence"]:
+            # x is X[0], y is X[1]
+            x = self.metrics_tensors()[metric].X[0] # (d,P,M)
+            y = self.metrics_tensors()[metric].X[1] # (d,P,M)
+            h = self.histogram.X[0]
+            xc = weighted_avg(x, h, axis=1) # (d,M)
+            yc = weighted_avg(y, h, axis=1) # (d,M)
+        else:
+            empirical_accs = self.auce.X[0]
+            yc = weighted_avg(
+                empirical_accs, 
+                np.expand_dims(self.histogram.X[0], axis=-1), 
+                axis=(1,2)
+            )
+            xc = self.auce.rhos
+        return xc, yc
+
+    def plot_calibration_curves(self, ks: List[int], variable_names: List[str], metrics: List[str]=["uce", "ence", "auce"]):
+        assert len(variable_names)==self.num_variables
+        if 1 not in ks: ks = [1]+ks
+        # histograms
+        ncols = self.num_variables//2
+        nrows = self.num_variables-ncols
+        fig, axs = plt.subplots(nrows=nrows, ncols=ncols, figsize=(12,10))
+        axs = axs.flatten()
+        H = np.nansum(self.histogram.X[0], axis=1)
+        for d in range(self.num_variables):
+            x = np.linspace(self.histogram.lo[d], self.histogram.hi[d], self.histogram.num_bins)
+            axs[d].plot(x, H[d])
+            axs[d].set_title(variable_names[d])
+        fig.show()
+        # metrics
+        for metric in metrics:
+            # compute calibration curves
+            if metric.lower()=="auce": 
+                xc, yc = self.get_calibration_curve(metric)
+            else:
+                xcks, ycks = [], []
+                for j, k in enumerate(ks):
+                    if k==1: obj = self.copy()
+                    else: obj = self.upsample(k)
+                    xc, yc = obj.get_calibration_curve(metric)
+                    xcks.append(xc)
+                    ycks.append(yc)
+            # create plot objects
+            if metric.lower()=="auce":
+                fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(12,5))
+                fig.suptitle(metric.upper())
+                plt.plot(np.linspace(0,1,2), np.linspace(0,1,2), color="black", linestyle="dotted")
+                for d in range(self.num_variables):
+                    var = variable_names[d]
+                    ax.plot(xc,yc[d],label=var)
+                ax.set(xlabel="expected accuracy", ylabel="empirical accuracy")
+                ax.legend(loc='upper left')
+            else:
+                ncols = self.num_variables//2
+                nrows = self.num_variables-ncols
+                fig, axs = plt.subplots(nrows=nrows, ncols=ncols, figsize=(12,10))
+                axs = axs.flatten()
+                fig.suptitle(metric.upper())
+                xc1, yc1 = self.get_calibration_curve(metric)
+                for d in range(self.num_variables):
+                    axs[d].set_title(variable_names[d])
+                    if metric.lower() == "ence":
+                        axs[d].set(xlabel="bin std", 
+                                ylabel="bin rmse")
+                    else:
+                        axs[d].set(xlabel="bin variance", 
+                                ylabel="bin mse")
+                    # plot calibration curves
+                    id_line = (np.linspace(np.nanmin(xc1[d]), np.nanmax(xc1[d]), 2), np.linspace(np.nanmin(xc1[d]), np.nanmax(xc1[d]), 2))
+                    axs[d].plot(*id_line, color="black", linestyle="dotted")
+                    for j, k in enumerate(ks):
+                        axs[d].plot(xcks[j][d], ycks[j][d], label=f"k={k}")
+                    axs[d].legend(loc='upper left')
+            plt.tight_layout()
+            fig.show()
 
 class StratifiedRCUSubset(StratifiedRCU):
     def __init__(self, metric_names, *args, **kwargs):
@@ -524,3 +749,11 @@ class StratifiedRCUSubset(StratifiedRCU):
         super().__init__(*args, **kwargs)
     def metrics_tensors(self):
         return {k:v for k,v in super().metrics_tensors().items() if k in self.metric_names}
+
+def res2df(res, cfg):
+    R = {}
+    for eid, eres in res.items():
+        for metric_name, metric_info in eres.items():
+            R[(eid, metric_name)] = metric_info["values"]
+            R[(eid, f"ause-{metric_name}")] = metric_info["ause"]
+    return pd.DataFrame(R, index=cfg["variable_names"]).T
