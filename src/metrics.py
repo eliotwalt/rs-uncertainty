@@ -306,7 +306,6 @@ class StratifiedAUCE(StratifiedCIAccuracy):
         cerr = np.abs(self.rhos-empirical)
         return np.nansum(cerr[...,1:]+cerr[...,:-1], axis=-1)/(2*self.num_rhos)
     def agg_tensor(self, H, bins):
-        hshape = H.shape
         X = self.X[...,bins,:]
         H = np.expand_dims(H, axis=-1)
         result = weighted_avg(X, H, axis=-2, keepdims=True)
@@ -742,6 +741,62 @@ class StratifiedRCU:
                     axs[d].legend(loc='upper left')
             plt.tight_layout()
             fig.show()
+    
+    def plot_residuals(self, groups: Dict[str, List[str]], variable_names: List[str]):
+        """
+        for each group and globally:
+        - residuals histogram
+        - residuals qqplot
+        
+        residuals are estimated by the mean bias error in each bins (self.mbe)
+        """
+        import statsmodels.api as sm
+        from scipy import stats
+        import matplotlib.cm as cm
+        assert len(variable_names)==self.num_variables
+        # add global group
+        groups["global"] = list(self.index_map.keys())
+        # one plot per variable with all groups
+        nrows = 3
+        ncols = ceil(self.num_variables/nrows)
+        hfig, haxs = plt.subplots(nrows=nrows, ncols=ncols, figsize=(12,10))
+        haxs = haxs.flatten()
+        qqfig, qqaxs = plt.subplots(nrows=nrows, ncols=ncols, figsize=(12,10))
+        qqaxs = qqaxs.flatten()
+        # collect residuals
+        residuals = {}
+        pvalues = {}
+        for i, var in enumerate(variable_names):
+            var_residuals = {"values": [], "group": []}
+            pvalues[var] = {}
+            colors = iter(cm.rainbow(np.linspace(0, 1, len(groups.keys()))))
+            for group_name, group_ids in groups.items():
+                group_ids = [self.index_map[gidx] for gidx in group_ids if gidx in self.index_map.keys()]
+                if len(group_ids)>0:
+                    # select residuals and histogram
+                    mbe = self.mbe.X[:,i,group_ids]
+                    h = self.histogram.X[:,i,group_ids]
+                    # aggregate across projects
+                    mbe = weighted_avg(mbe, h, axis=1).squeeze(0)
+                    # gaussian fit
+                    norm = stats.norm(loc=np.nanmean(mbe), scale=np.nanstd(mbe))
+                    # pvalues[var][group_name] = tstat.pvalue
+                    pvalues[var][group_name] = stats.kstest(mbe, nan_policy="omit").pvalue
+                    # add residuals
+                    var_residuals["values"].extend(mbe.tolist())
+                    var_residuals["group"].extend([f"{group_name} (p={pvalues[var][group_name]:.1e})".format() for _ in mbe.tolist()])
+                    color = next(colors)
+                    sm.qqplot(mbe, ax=qqaxs[i], line="45", label=group_name, markerfacecolor=color, markeredgecolor=color, alpha=0.2)
+                    # stats.probplot(mbe, plot=qqaxs[i])
+            df = pd.DataFrame(var_residuals)
+            sns.histplot(data=df, x="values", hue="group", multiple="dodge", ax=haxs[i], bins=15)
+            haxs[i].set_title(f"{var}")# (pvalues: {', '.join([f'{group}={pval:.1e}' for group, pval in pvalues[var].items()])})")
+            qqaxs[i].set_title(var)
+            qqaxs[i].legend(loc='lower right')
+            residuals[var] = var_residuals
+        plt.tight_layout()
+        hfig.show()
+        qqfig.show()
 
 class StratifiedRCUSubset(StratifiedRCU):
     def __init__(self, metric_names, *args, **kwargs):
@@ -749,11 +804,3 @@ class StratifiedRCUSubset(StratifiedRCU):
         super().__init__(*args, **kwargs)
     def metrics_tensors(self):
         return {k:v for k,v in super().metrics_tensors().items() if k in self.metric_names}
-
-def res2df(res, cfg):
-    R = {}
-    for eid, eres in res.items():
-        for metric_name, metric_info in eres.items():
-            R[(eid, metric_name)] = metric_info["values"]
-            R[(eid, f"ause-{metric_name}")] = metric_info["ause"]
-    return pd.DataFrame(R, index=cfg["variable_names"]).T

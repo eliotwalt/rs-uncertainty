@@ -1,7 +1,14 @@
 import numpy as np
 import torch
 from torch import Tensor
-
+from sklearn.linear_model import LinearRegression
+from scipy import stats
+import matplotlib.pyplot as plt
+import pandas as pd
+import seaborn as sns
+from typing import *
+sns.set()
+sns.set_style("whitegrid")
 
 class UnNormalize(object):
     def __init__(self, mean, std):
@@ -110,3 +117,66 @@ class CombinedStats(RunningStats):
         self.mean = (self.num_seen*self.mean+new_num_seen*new_mean)/(self.num_seen+new_num_seen)
         self.mean_of_squared = (self.num_seen*self.mean_of_squared+new_num_seen*new_mean_of_squared)/(self.num_seen+new_num_seen)
         self.num_seen += new_num_seen
+
+class SpatialCorrelationAnalyzer:
+    def __init__(
+        self,
+        save_dir=None
+    ):
+        self.save_dir = save_dir
+
+    def fit(self, gt, pred):
+        assert pred.shape==gt.shape
+        self.pred = pred
+        self.gt = gt
+        self.res = gt-pred
+        self.num_variables = pred.shape[0]
+        self.gt_decorr, self.pred_decorr = self.decorrelate(gt.copy(), pred.copy())
+        self.res_decorr = self.gt_decorr - self.pred_decorr
+    
+    def decorrelate(self, gt, pred):
+        """
+        Fits linear regression and rescale by value of linear prediction to spatially decorrellate
+        """
+        mask = ~np.isnan(pred).all(0)
+        locations = np.indices(pred.shape[1:], dtype=float)
+        locations[0,:,:] /= float(locations.shape[1]-1)
+        locations[1,:,:] /= float(locations.shape[2]-1)
+        x = locations[:,mask].reshape(-1,2)
+        y = pred[:,mask].reshape(-1,self.num_variables)
+        model = LinearRegression().fit(x,y)
+        scaling = model.predict(locations.reshape(-1,2)).reshape(pred.shape)
+        print(scaling)
+        return gt-scaling, pred-scaling
+
+    def plot_residuals(self, kind, variable_names):
+        assert kind in ["original", "decorrelated"]
+        if kind=="original":
+            res_ = self.res
+            pred_ = self.pred
+        else:
+            res_ = self.res_decorr
+            pred_ = self.pred_decorr
+        for k in range(self.num_variables):
+            res = res_[:,~np.isnan(pred_).all(0)][k]
+            pred = pred_[:,~np.isnan(pred_).all(0)][k]
+            print(res.shape, pred.shape)
+            gauss_fit_dist = stats.norm(loc=np.nanmean(res), scale=np.nanstd(res))
+            gauss_sample = gauss_fit_dist.rvs(size=len(res))
+            fig, axs = plt.subplots(nrows=3, ncols=1, figsize=(9,4))
+            axs.flatten()
+            # pred vs res
+            axs[0].scatter(pred, res, alpha=.3, s=0.7)
+            axs[0].set(xlabel="predictions", ylabel="residuals")
+            # res histogram
+            sns.histplot(gauss_sample, label="gaussian fit", ax=axs[1])
+            sns.histplot(res, label="residuals", ax=axs[1])
+            axs[1].legend(loc="upper left")
+            # qq
+            stats.probplot(res, dist=gauss_fit_dist, plot=axs[2], rvalue=True)
+            axs[2].set_title("")
+            # ks
+            pval = stats.kstest(res, gauss_fit_dist.cdf).pvalue
+            fig.suptitle(variable_names[k]+f"(p={pval:.3e})")
+            plt.tight_layout()
+            plt.show()
