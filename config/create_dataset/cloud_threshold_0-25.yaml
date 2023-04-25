@@ -3,7 +3,7 @@ s2_reprojected_dir: 'assets/data/sentinel_data/s2_reprojected'
 gt_dir: 'assets/data/preprocessed'
 split_mask_dir: 'assets/data/split_masks'
 save_dir: 'data/'
-name: 'baseline'
+name: 'cloud_threshold_0-25'
 project_shapefiles: ['assets/data/NHM_projectDekning_AOI_edit2015_V2.shp', 'assets/data/ALS_projects_Dz_all_norway.shp']
 data_bands: [1, 2, 3, 4, 5] # p95, mean height, density, gini, cover
 projects: ['346', '342', '9', '341', '354', '415', '418', '416', '426', '429', '439', '560', '472', '521', '498',
@@ -13,4 +13,4 @@ sampling_strategy: 'valid_center'
 patch_size: 15
 testset_max_days_delta: 365 # restrict testset to "cleanest" version, i.e. with diff between images and gt of max x days
 cloud_prob_threshold: 10
-cloudy_pixels_threshold: 0.1
+cloudy_pixels_threshold: 0.25

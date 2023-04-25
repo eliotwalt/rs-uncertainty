@@ -8,7 +8,7 @@ projects_east: ['346', '9', '341', '354', '415', '418', '416', '429', '439', '56
 projects_west: ['528', '537', '792', '988', '769']
 projects_north: ['819', '909', '896']
 # paths
-pkl_dir: 'data/2023-04-05_18-58-33'
+pkl_dir: 'data/2023-04-05_18-58-33_baseline'
 prediction_dir: 'results/2023-04-06_10-52-04_baseline'
 gt_dir: 'assets/data/preprocessed'
 # metrics config
