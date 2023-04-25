@@ -490,11 +490,12 @@ class StratifiedRCU:
                 kwarg_name: kwarg_value
                 for kwarg_name, kwarg_value in self.kwargs().items()
             },
-            "results": self.results.to_dict() if isinstance(self.results, pd.DataFrame) else None
+            "results": self.results.to_dict(orient="list") if isinstance(self.results, pd.DataFrame) else None
         }
         for upper_key in data.keys():
-            for lower_key, lower_value in data[upper_key].items():
-                data[upper_key][lower_key] = type_serialize(lower_value)
+            if upper_key != "results":
+                for lower_key, lower_value in data[upper_key].items():
+                    data[upper_key][lower_key] = type_serialize(lower_value)
         with open(path, mode="w", encoding="utf-8") as f:
             json.dump(data, f, indent=4)
 
@@ -507,7 +508,7 @@ class StratifiedRCU:
         with open(path, mode="r", encoding="utf-8") as f:
             data = json.load(f)
             for upper_key in data.keys():
-                if upper_key == "results": data[upper_key] = pd.from_dict(data[upper_key])
+                if upper_key == "results": data[upper_key] = pd.DataFrame.from_dict(data["results"])
                 else:
                     for lower_key, lower_value in data[upper_key].items():
                         data[upper_key][lower_key] = type_deserialize(lower_value)
@@ -519,6 +520,7 @@ class StratifiedRCU:
             if isinstance(obj.kwargs()[kwarg_name], StratifiedTensor):
                 obj.kwargs()[kwarg_name].__setattr__("X", kwarg_value)
             else: obj.__setattr__(kwarg_name, kwarg_value)
+        if "results" in data.keys(): obj.results = data["results"]
         return obj
 
     def upsample(self, k:int):
@@ -692,7 +694,7 @@ class StratifiedRCU:
         H = np.nansum(self.histogram.X[0], axis=1)
         for d in range(self.num_variables):
             x = np.linspace(self.histogram.lo[d], self.histogram.hi[d], self.histogram.num_bins)
-            axs[d].plot(x, H[d])
+            axs[d].plot(x, H[d])#, color="C0")
             axs[d].set_title(variable_names[d])
         fig.show()
         # metrics
@@ -737,7 +739,10 @@ class StratifiedRCU:
                     id_line = (np.linspace(np.nanmin(xc1[d]), np.nanmax(xc1[d]), 2), np.linspace(np.nanmin(xc1[d]), np.nanmax(xc1[d]), 2))
                     axs[d].plot(*id_line, color="black", linestyle="dotted")
                     for j, k in enumerate(ks):
-                        axs[d].plot(xcks[j][d], ycks[j][d], label=f"k={k}")
+                        if k==1:
+                            axs[d].scatter(xcks[j][d], ycks[j][d], label=f"k={k}", alpha=.2, color=f"C{j}", edgecolor=None, marker=".")
+                        else:
+                            axs[d].plot(xcks[j][d], ycks[j][d], label=f"k={k}", color=f"C{j}")
                     axs[d].legend(loc='upper left')
             plt.tight_layout()
             fig.show()
@@ -770,7 +775,7 @@ class StratifiedRCU:
             var_residuals = {"values": [], "group": []}
             pvalues[var] = {}
             colors = iter(cm.rainbow(np.linspace(0, 1, len(groups.keys()))))
-            for group_name, group_ids in groups.items():
+            for (group_name, group_ids) in groups.items():
                 group_ids = [self.index_map[gidx] for gidx in group_ids if gidx in self.index_map.keys()]
                 if len(group_ids)>0:
                     # select residuals and histogram
@@ -779,14 +784,14 @@ class StratifiedRCU:
                     # aggregate across projects
                     mbe = weighted_avg(mbe, h, axis=1).squeeze(0)
                     # gaussian fit
-                    norm = stats.norm(loc=np.nanmean(mbe), scale=np.nanstd(mbe))
-                    # pvalues[var][group_name] = tstat.pvalue
-                    pvalues[var][group_name] = stats.kstest(mbe, nan_policy="omit").pvalue
+                    norm = stats.norm(loc=np.nanmean(mbe), scale=np.nanstd(mbe)).rvs(size=mbe.shape[0])
+                    pvalues[var][group_name] = stats.kstest(mbe, cdf=norm).pvalue
                     # add residuals
                     var_residuals["values"].extend(mbe.tolist())
                     var_residuals["group"].extend([f"{group_name} (p={pvalues[var][group_name]:.1e})".format() for _ in mbe.tolist()])
                     color = next(colors)
-                    sm.qqplot(mbe, ax=qqaxs[i], line="45", label=group_name, markerfacecolor=color, markeredgecolor=color, alpha=0.2)
+                    mbe_std = (mbe-np.nanmean(mbe))/np.nanstd(mbe)
+                    sm.qqplot(mbe_std, ax=qqaxs[i], line="45", label=group_name, markerfacecolor=color, markeredgecolor=color, alpha=0.2)
                     # stats.probplot(mbe, plot=qqaxs[i])
             df = pd.DataFrame(var_residuals)
             sns.histplot(data=df, x="values", hue="group", multiple="dodge", ax=haxs[i], bins=15)
