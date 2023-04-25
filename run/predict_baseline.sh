@@ -1,0 +1,1 @@
+./run/predict_testset.sh config/predict_testset/baseline.yaml
