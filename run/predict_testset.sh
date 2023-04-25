@@ -8,7 +8,7 @@ mkdir -p $(dirname $log_f)
 touch log_f
 
 # define slurm options
-options="-n 1 --mem-per-cpu=64000 --time=4:00:00 --job_name=$job_name --gpus=1 --gres=gpumem:12g --output=$log_f --error=$log_f"
+options="-n 1 --mem-per-cpu=64000 --time=4:00:00 --job-name=$job_name --gpus=1 --gres=gpumem:12g --output=$log_f --error=$log_f"
 
 # lauch
 echo "Submitting job '$job_name'"
