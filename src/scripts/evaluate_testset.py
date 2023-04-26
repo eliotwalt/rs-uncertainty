@@ -53,7 +53,7 @@ def main():
         for key, values in cfg.items():
             config[f"{prefix}.{key}"] = values
     # intialize wandb
-    wandb.init(
+    wb_run = wandb.init(
         project="rcu-evaluation",
         config=config,
         name=os.path.basename(cfg["prediction_dir"]),
@@ -119,11 +119,14 @@ def main():
         variable_names=cfg["variable_names"]
     )
     rcu.save_json(pjoin(cfg["prediction_dir"], "rcu.json"))
+    # log rcu json
+    wb_run.save(pjoin(cfg["prediction_dir"], "rcu.json"))
     # log metrics for each group, variable and kind
     log_df = rcu.results.copy()
     log_df["key"] = log_df.apply(lambda x: "-".join([x["kind"], x["metric"], x["variable"], x["group"]]), axis=1)
     log_df = log_df[["key", "x"]]
-    for i in range(len(log_df)):
-        wandb.log({log_df["key"][i]: log_df["x"][i]})
+    wb_run.log({key: value for key, value in zip(log_df.key, log_df.value)})
+    # close
+    wb_run.finish()
 
 if __name__ == "__main__": main()
