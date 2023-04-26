@@ -53,11 +53,10 @@ def main():
         for key, values in cfg.items():
             config[f"{prefix}.{key}"] = values
     # intialize wandb
-    experiment_name = datetime.now().strftime('%Y-%m-%d_%H-%M-%S') + (f'_{cfg["tags"][0]}' if cfg["tags"][0] else '')
     wandb.init(
         project="rcu-evaluation",
         config=config,
-        name=experiment_name,
+        name=os.path.basename(cfg["prediction_dir"]),
         tags=cfg["tags"]
     )
     # define projects span
@@ -124,11 +123,7 @@ def main():
     log_df = rcu.results.copy()
     log_df["key"] = log_df.apply(lambda x: "-".join([x["kind"], x["metric"], x["variable"], x["group"]]), axis=1)
     log_df = log_df[["key", "x"]]
-    log_dict = log_df.to_dict(orient="list")
     for i in range(len(log_df)):
         wandb.log({log_df["key"][i]: log_df["x"][i]})
-
-    # log table
-    wandb.log({"results_table": wandb.Table(dataframe=rcu.results)})
 
 if __name__ == "__main__": main()

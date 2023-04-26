@@ -1,5 +1,5 @@
 # tags
-tags: ['cloud_threshold_0-50'] # keep experiment kind as first tag!
+tags: ['cloud_threshold'] # keep experiment kind as first tag!
 # Variables
 data_bands: [1, 2, 3, 4, 5]
 variable_names: ['P95', 'MeanH', 'Dens', 'Gini', 'Cover']
