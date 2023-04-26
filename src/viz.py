@@ -1,9 +1,12 @@
 import wandb
 import pandas as pd
 import matplotlib.pyplot as plt 
+import tempfile
+import json
 import seaborn as sns
 sns.set()
 sns.set_style("whitegrid")
+from metrics import StratifiedRCU
 
 class ExperimentVisualizer():
     def __init__(
@@ -22,19 +25,36 @@ class ExperimentVisualizer():
         self.add_baseline = add_baseline
         if self.add_baseline: self.baseline, self.runs = self._get_runs()
         else: self.runs = self._get_runs()
+        if self.add_baseline: self.baseline_rcu, self.rcus = self._get_rcus()
+        else: self.rcus = self._get_rcus()
         self.df = self._build_df()
     
     def _get_runs(self):
-        ret = []
         api = wandb.Api()
         if self.add_baseline:
             baselines = api.runs(path=self.root, filters={"tags": "baseline"})
             assert len(baselines)==1, "Multiple baseline runs were found: {}".format(", ".join(b.name for b in baselines))
-            ret.append(baselines[0])
         variable_runs = api.runs(path=self.root, filters={"tags": self.filter_tag})
         print(f"Found {len(variable_runs)} runs for experiment on variable {self.variable_name}.")
-        ret.append(variable_runs)
-        return tuple(ret)
+        if self.add_baseline: return baselines[0], variable_runs
+        else: return variable_runs
+    
+    def _get_rcus(self):
+        def download_rcu(run, path):
+            with tempfile.TemporaryDirectory() as d:
+                with run.file(path).download(d) as f:
+                    data = json.load(f)
+            return StratifiedRCU.from_json(data)
+        if self.add_baseline:
+            path = list(filter(lambda x: x.name.endswith("rcu.json"), list(self.baseline.file)))[0]
+            baseline_rcu = download_rcu(self.baseline, path)
+        rcus = []
+        for run in self.runs:
+            path = list(filter(lambda x: x.name.endswith("rcu.json"), list(run.file)))[0]
+            # download json
+            rcus.append(download_rcu(run, path))
+        if self.add_baseline: return baseline_rcu, rcus
+        else: return rcus
     
     def _build_df(self):
         def fill_run(run, df_dict, experiment):
@@ -62,7 +82,7 @@ class ExperimentVisualizer():
     def plot_ause(self, metric: str, ax):
         pass
 
-    def plot_
+    def plot_(): pass
 
     
 class CloudThresholdVisualizer(ExperimentVisualizer):
@@ -71,4 +91,10 @@ class CloudThresholdVisualizer(ExperimentVisualizer):
         entity: str,
         project: str,
         add_baseline: bool=True,
-    ): super().__init__(entity, project, filter_tag="cloud_threshold", variable_name="dataset.cloudy_pixels_threshold", add_baseline=add_baseline)
+    ): 
+        super().__init__(
+            entity, project, 
+            filter_tag="cloud_threshold", 
+            variable_name="dataset.cloudy_pixels_threshold", 
+            add_baseline=add_baseline
+        )

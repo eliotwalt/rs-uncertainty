@@ -114,19 +114,24 @@ def main():
             variance /= labels_std**2
         # add project
         rcu.add_project(project, gt, mean, variance)
+    print(f"Computing result dataframe")
     rcu.get_results_df(
         groups={"east": cfg["projects_east"], "west": cfg["projects_west"], "north": cfg["projects_north"]},
         variable_names=cfg["variable_names"]
     )
+    print(f"Serializing StratifiedRCU object to "+str(pjoin(cfg["prediction_dir"], "rcu.json"))+"...")
     rcu.save_json(pjoin(cfg["prediction_dir"], "rcu.json"))
     # log rcu json
-    wb_run.save(pjoin(cfg["prediction_dir"], "rcu.json"))
+    print(f"Logging serialized StratifiedRCU...")
+    wb_run.save(str(pjoin(cfg["prediction_dir"], "rcu.json")))
     # log metrics for each group, variable and kind
     log_df = rcu.results.copy()
     log_df["key"] = log_df.apply(lambda x: "-".join([x["kind"], x["metric"], x["variable"], x["group"]]), axis=1)
     log_df = log_df[["key", "x"]]
+    print(f"Logging {} metrics...".format(len(log_df)))
     wb_run.log({key: value for key, value in zip(log_df.key, log_df.value)})
     # close
+    print("Finishing run...")
     wb_run.finish()
 
 if __name__ == "__main__": main()
