@@ -1,5 +1,5 @@
 # tags
-tags: ['baseline'] # keep experiment kind as first tag!
+tags: ['cloud_threshold_0-25'] # keep experiment kind as first tag!
 # Variables
 data_bands: [1, 2, 3, 4, 5]
 variable_names: ['P95', 'MeanH', 'Dens', 'Gini', 'Cover']
@@ -10,8 +10,8 @@ projects_east: ['346', '9', '341', '354', '415', '418', '416', '429', '439', '56
 projects_west: ['528', '537', '792', '988', '769']
 projects_north: ['819', '909', '896']
 # paths
-pkl_dir: 'data/2023-04-05_18-58-33_baseline'
-prediction_dir: 'results/2023-04-25_17-38-31_baseline'
+pkl_dir: 'data/2023-04-25_15-46-45_cloud_threshold_0-25'
+prediction_dir: 'results/2023-04-25_17-48-18_cloud_threshold_0-25'
 gt_dir: 'assets/data/preprocessed'
 # metrics config
 num_bins: 1500

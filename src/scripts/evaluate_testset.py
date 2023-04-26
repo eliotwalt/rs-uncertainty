@@ -1,6 +1,8 @@
 import os, sys
 root = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, root)
+import wandb
+from datetime import datetime
 import rasterio
 import argparse
 import yaml
@@ -35,13 +37,30 @@ def main():
     - save results (incl. histogram)
     """
     results = {}
-    # Load config
+    # Load configs
     args = parse_args()
     print(f"Loading config file {args.cfg}...")
     with args.cfg.open("r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
         for k, v in cfg.items():
             if k.endswith("_dir"): cfg[k] = Path(v)
+    with open(os.path.join(cfg["pkl_dir"], "data_config.yaml")) as f:
+        dataset_cfg = yaml.safe_load(f)
+    with open(os.path.join(cfg["prediction_dir"], "prediction_config.yaml")) as f:
+        prediction_cfg = yaml.safe_load(f)
+    config = {}
+    for prefix, cfg in zip(["dataset", "prediction", "evaluation"], [dataset_cfg, prediction_cfg, cfg]):
+        for key, values in cfg.items():
+            config[f"{prefix}.{key}"] = values
+    # intialize wandb
+    experiment_name = datetime.now().strftime('%Y-%m-%d_%H-%M-%S') + (f'_{cfg["tags"][0]}' if cfg["tags"][0] else '')
+    wandb.init(
+        project="test",
+        config=config,
+        name=experiment_name,
+        tags=cfg["tags"]
+    )
+    # define projects span
     projects = cfg["projects_east"]+cfg["projects_west"]+cfg["projects_north"]
     # Load standardization data
     with pjoin(cfg["pkl_dir"], "stats.yaml").open("r", encoding="utf-8") as f:
@@ -101,5 +120,15 @@ def main():
         variable_names=cfg["variable_names"]
     )
     rcu.save_json(pjoin(cfg["prediction_dir"], "rcu.json"))
+    # log metrics for each group, variable and kind
+    log_df = rcu.results.copy()
+    log_df["key"] = log_df.apply(lambda x: "-".join([x["kind"], x["metric"], x["variable"], x["group"]]), axis=1)
+    log_df = log_df[["key", "x"]]
+    log_dict = log_df.to_dict(orient="list")
+    for i in range(len(log_df)):
+        wandb.log({log_df["key"][i]: log_df["x"][i]})
+
+    # log table
+    wandb.log({"results_table": wandb.Table(dataframe=rcu.results)})
 
 if __name__ == "__main__": main()
