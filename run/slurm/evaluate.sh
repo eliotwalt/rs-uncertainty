@@ -1,6 +1,6 @@
 #!/bin/bash
 
-echo "Starting prediction job"
+echo "Starting evaluation job"
 
 # ************************************************** ARGUMENTS ***************************************************
 CONFIG_FILE=$1
@@ -14,4 +14,4 @@ pip install gdal==`gdal-config --version` --user # do not put it in requirements
 pip install -r requirements.txt --user
 
 # **************************************************** COMMAND ***************************************************
-python /cluster/work/igp_psr/elwalt/pdm/rs-uncertainty/src/scripts/predict_testset.py --cfg $CONFIG_FILE
+python /cluster/work/igp_psr/elwalt/pdm/rs-uncertainty/src/scripts/evaluate_testset.py --cfg $CONFIG_FILE
