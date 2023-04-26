@@ -55,7 +55,7 @@ def main():
     # intialize wandb
     experiment_name = datetime.now().strftime('%Y-%m-%d_%H-%M-%S') + (f'_{cfg["tags"][0]}' if cfg["tags"][0] else '')
     wandb.init(
-        project="test",
+        project="rcu-evaluation",
         config=config,
         name=experiment_name,
         tags=cfg["tags"]
