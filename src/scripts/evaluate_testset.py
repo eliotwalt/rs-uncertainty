@@ -128,7 +128,7 @@ def main():
     log_df = rcu.results.copy()
     log_df["key"] = log_df.apply(lambda x: "-".join([x["kind"], x["metric"], x["variable"], x["group"]]), axis=1)
     log_df = log_df[["key", "x"]]
-    print(f"Logging {} metrics...".format(len(log_df)))
+    print(f"Logging {len(log_df)} metrics...")
     wb_run.log({key: value for key, value in zip(log_df.key, log_df.value)})
     # close
     print("Finishing run...")
