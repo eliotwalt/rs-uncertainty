@@ -24,18 +24,6 @@ def parse_args():
     return p.parse_args()
 
 def main():
-    """
-    x load standardization data
-    x loop on projects, compute variance bounds online
-    x init rcu
-    - loop on projects
-        - standardize
-        - add project
-        - get([project_id])
-    - loop on regions
-        - get(region)
-    - save results (incl. histogram)
-    """
     results = {}
     # Load configs
     args = parse_args()
