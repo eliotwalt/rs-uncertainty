@@ -87,7 +87,8 @@ class ExperimentVisualizer():
         fig.suptitle(metric)
         return axs
     
-    def variable_calibration_plot(self, metric, variable, k=100, ax=None):
+    def variable_calibration_plot(self, metric, variable, k=100, log_bins=False, ax=None):
+        bin_type = "log" if log_bins else "linear"
         if ax is None:
             fig, ax = plt.subplots()
         var_idx = self.variable_names.index(variable)
@@ -97,7 +98,7 @@ class ExperimentVisualizer():
         else: cols = ["bin std", "bin rmse", self.exp_var_name]
         ccdf = pd.DataFrame(columns=cols)
         for i, rcu in enumerate(self.rcus):
-            lorcu = rcu.upsample(k)
+            lorcu = rcu.upsample(k, bin_type=bin_type)
             xc, yc = lorcu.get_calibration_curve(metric)
             if metric != "auce": xc = xc[var_idx]
             ct = np.full(xc.shape, str(self.exp_vars[i]))
@@ -111,16 +112,18 @@ class ExperimentVisualizer():
         )
         ax.plot(*id_line, color="black", linestyle="dotted")
         sns.lineplot(data=ccdf, x=cols[0], y=cols[1], hue=cols[2], ax=ax)
+        print(xc.shape)
+        ax.vlines(x=xc, ymin=lo, ymax=hi/5, color="black", ls="dashed")
         return ax
     
-    def calibration_plot(self, metric, k=100):
+    def calibration_plot(self, metric, k=100, log_bins=False):
         num_variables = len(self.variable_names)
         ncols = num_variables//2
         nrows = num_variables-ncols
         fig, axs = plt.subplots(nrows=nrows, ncols=ncols, figsize=(12, 12))
         axs = axs.flatten()
         for i, var in enumerate(self.variable_names):
-            self.variable_calibration_plot(metric, var, k=k, ax=axs[i])
+            self.variable_calibration_plot(metric, var, k=k, log_bins=log_bins, ax=axs[i])
             axs[i].set_title(var)
         fig.suptitle(metric+" calibration plot")
         return axs

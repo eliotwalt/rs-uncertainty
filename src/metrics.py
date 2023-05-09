@@ -144,8 +144,9 @@ class StratifiedMetric(StratifiedTensor):
         """aggregate (d,P,M)->(d,) if not keepbins else (d,P,M)->(d,M)"""
         raise NotImplementedError()
 
-    def agg_tensor(self, H, bins):
-        X = self.X[...,bins]
+    def agg_tensor(self, H, bins, var_idx=None):
+        if var_idx is None: X = self.X[...,bins]
+        else: X = np.transpose(self.X[:,var_idx,...,bins], (1,2,0))
         return weighted_avg(X, H, axis=-1, keepdims=True)
     
     def cumagg(self, histogram, *arrs):
@@ -305,8 +306,9 @@ class StratifiedAUCE(StratifiedCIAccuracy):
         empirical = super().agg(histogram, *arrs)
         cerr = np.abs(self.rhos-empirical)
         return np.nansum(cerr[...,1:]+cerr[...,:-1], axis=-1)/(2*self.num_rhos)
-    def agg_tensor(self, H, bins):
-        X = self.X[...,bins,:]
+    def agg_tensor(self, H, bins, var_idx=None):
+        if var_idx is None: X = self.X[...,bins,:]
+        else: X = np.transpose(self.X[:,var_idx,...,bins,:], (1,2,0,3))
         H = np.expand_dims(H, axis=-1)
         result = weighted_avg(X, H, axis=-2, keepdims=True)
         return result
@@ -523,7 +525,7 @@ class StratifiedRCU:
         if "results" in data.keys(): obj.results = data["results"]
         return obj
 
-    def upsample(self, k:int):
+    def upsample(self, k:int, bin_type:str="linear"):
         # Create empty copy with num_bins = self.num_bins//k
         rcu = self.empty_copy(k=k)
         # shapes
@@ -531,17 +533,43 @@ class StratifiedRCU:
         _, _, _, hi_num_bins = self.histogram.shape
         assert num_bins>1, f"upsampled StratifiedRCU requires more than 1 bin. Decrease k"
         # bin map
-        bin_map = [np.arange(i, i+k) for i in np.arange(0, hi_num_bins, k)]
-        # upsample histogram
-        for i, bins in enumerate(bin_map):
-            hi_histogram = self.histogram[...,bins]
-            rcu.histogram.X[...,i] = np.nansum(hi_histogram, axis=-1)
-            rcu.mean_variance.X[...,i] = weighted_avg(self.mean_variance[...,bins], hi_histogram, axis=-1)
-        # upsample metrics
-        for metric_name, metric_tensor in rcu.metrics_tensors().items():
-            hi_metric_tensor = self.metrics_tensors()[metric_name]
+        if bin_type == "linear":
+            bin_map = [np.arange(i, i+k) for i in np.arange(0, hi_num_bins, k)]
+            # resample histogram
             for i, bins in enumerate(bin_map):
-                metric_tensor.X[:,:,:,[i]] = hi_metric_tensor.agg_tensor(self.histogram[...,bins], bins)
+                rcu.histogram.X[:,:,:,[i]] = np.nansum(self.histogram[:,:,:,bins], axis=-1, keepdims=True)
+            # upsample metrics
+            for metric_name, metric_tensor in rcu.metrics_tensors().items():
+                hi_metric_tensor = self.metrics_tensors()[metric_name]
+                for i, bins in enumerate(bin_map):
+                    metric_tensor.X[:,:,:,[i]] = hi_metric_tensor.agg_tensor(self.histogram[...,bins], bins)
+        elif bin_type == "log":
+            log_bins = np.stack([np.logspace(
+                np.log10(self.histogram.lo[i]),
+                np.log10(self.histogram.hi[i]),
+                self.histogram.shape[-1]//k,
+                base=10
+            ) for i in range(self.num_variables)], axis=0)
+            log_bin_ids = np.stack([np.digitize(self.histogram.bins[i], bins=log_bins[i])-1 for i in range(self.num_variables)], axis=0)
+            bin_map = [[[] for i in range(self.histogram.shape[-1]//k)] for _ in range(self.num_variables)]
+            for d in range(self.num_variables):
+                for hi_idx, lo_idx in enumerate(log_bin_ids[d]):
+                    bin_map[d][lo_idx].append(hi_idx)
+                # resample histogram
+                for i, bins in enumerate(bin_map[d]):
+                    rcu.histogram.X[:,d,:,[i]] = np.nansum(self.histogram[:,d,:,bins])
+            # upsample metrics
+            for metric_name, metric_tensor in rcu.metrics_tensors().items():
+                hi_metric_tensor = self.metrics_tensors()[metric_name]
+                for d in range(self.num_variables):
+                    for i, bins in enumerate(bin_map[d]):
+                        if len(bins) == 1:
+                            metric_tensor.X[:,d,:,[i]] = hi_metric_tensor.X[:,d,:,bins]
+                        elif len(bins) > 1:
+                            h = np.transpose(self.histogram[:,d,...,bins], (1,2,0))
+                            metric_tensor.X[:,d,:,[i]] = hi_metric_tensor.agg_tensor(h, bins, var_idx=d).reshape(metric_tensor.X[:,d,:,[i]].shape)
+                        else: continue
+        else: raise ValueError(f"Unknwon bin_type: {bin_type}")   
         return rcu
 
     def add_project(self, project_id: str, gt:np.ndarray, mean:np.ndarray, variance:np.ndarray):
@@ -683,7 +711,8 @@ class StratifiedRCU:
             xc = self.auce.rhos
         return xc, yc
 
-    def plot_calibration_curves(self, ks: List[int], variable_names: List[str], metrics: List[str]=["uce", "ence", "auce"]):
+    def plot_calibration_curves(self, ks: List[int], variable_names: List[str], metrics: List[str]=["uce", "ence", "auce"], log_bins: bool=False):
+        bin_type = "log" if log_bins else "linear"
         assert len(variable_names)==self.num_variables
         if 1 not in ks: ks = [1]+ks
         # histograms
@@ -706,7 +735,7 @@ class StratifiedRCU:
                 xcks, ycks = [], []
                 for j, k in enumerate(ks):
                     if k==1: obj = self.copy()
-                    else: obj = self.upsample(k)
+                    else: obj = self.upsample(k, bin_type=bin_type)
                     xc, yc = obj.get_calibration_curve(metric)
                     xcks.append(xc)
                     ycks.append(yc)
