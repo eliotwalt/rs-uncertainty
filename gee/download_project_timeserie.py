@@ -1,6 +1,6 @@
-import argparse
-import yaml
-from ee_download_workflow import download_project
+import yaml, os, argparse
+from pathlib import Path
+from gee_download import GoogleEarthEngineLocalDownloader
 from utils import get_project_data
 
 p = argparse.ArgumentParser()
@@ -8,10 +8,28 @@ p.add_argument("-c", "--cfg", help="config file", required=True)
 args = p.parse_args()
 with open(args.cfg) as f: 
     cfg = yaml.safe_load(f)
-data_cfg = {"project_id": cfg["project_id"]}
-for key in ["gt_dir", "shapefile_paths", "gt_data_bands"]: data_cfg[key] = cfg.pop(key)
-gt_file, gt, gt_date, gt_crs, polygon, _ = get_project_data(**data_cfg)
-cfg["polygon"] = polygon
-cfg["crs"] = gt_crs
-cfg["gt_date"] = gt_date
-download_project(**cfg, verbose=True)
+
+# project data
+data_cfg = cfg["data"]
+data_cfg["project_id"] = cfg["project_id"]
+if cfg["verbose"]: print("Loading data for project ", cfg["project_id"])
+gt_file, _, gt_date, gt_crs, polygon, _ = get_project_data(**data_cfg)
+
+# downloader
+gee_cfg = cfg["gee"]
+gee_cfg["verbose"] = cfg["verbose"]
+geedl = GoogleEarthEngineLocalDownloader(**gee_cfg)
+
+# download
+ts_cfg = cfg["timeserie"]
+ts_cfg["project_id"] = cfg["project_id"]
+ts_cfg["localdir"] = os.path.join(ts_cfg["localdir"], ts_cfg["project_id"])
+Path(ts_cfg["localdir"]).mkdir(parents=True, exist_ok=True)
+ts_cfg.update({
+    "polygon": polygon,
+    "crs": gt_crs, 
+    "gt_date": gt_date
+})
+geedl.download_timeserie(**ts_cfg)
+
+

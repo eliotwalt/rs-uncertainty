@@ -15,6 +15,9 @@ assets
 ignore/
 wandb/
 cp_masks/
+gee_data/
+credentials.json
+token.json
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
