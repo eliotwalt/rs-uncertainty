@@ -32,6 +32,7 @@ def get_project_data(
     gt_dir,
     gt_data_bands,
     shapefile_paths,
+    target_crs="EPSG:4326",
 ):
     # Get gt
     gt_file = rasterio.open(pjoin(gt_dir, project_id+".tif"))
@@ -40,7 +41,7 @@ def get_project_data(
     # Load shapefiles
     project_shape_collections = [fiona.open(p) for p in shapefile_paths]
     # create the shape ("polygon") associated to the project 
-    polygon, gt_crs, gt_date = None, None, None
+    polygon, crs, gt_date = None, None, None
     for collection in project_shape_collections:
         try:
             polygon = [s['geometry'] for s in collection if s['properties']['kv_id'] == int(project_id)][0]
@@ -50,5 +51,6 @@ def get_project_data(
             break
         except IndexError: pass 
     if polygon is None: print("No polygon found")
-    polygon = rasterio.warp.transform_geom(src_crs=crs, dst_crs=gt_file.crs, geom=polygon)
-    return gt_file, gt, gt_date, gt_crs, polygon["coordinates"], bounds
+    print("reprojecting polygon", crs, "->", target_crs)
+    polygon = rasterio.warp.transform_geom(src_crs=crs, dst_crs=target_crs, geom=polygon)
+    return gt_file, gt, gt_date, gt_file.crs, polygon["coordinates"], bounds

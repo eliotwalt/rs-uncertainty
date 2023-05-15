@@ -4,6 +4,7 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from googleapiclient.http import MediaIoBaseDownload
 
 # See, edit, create, delete all GDrive files
 # see: https://developers.google.com/identity/protocols/oauth2/scopes
@@ -12,7 +13,7 @@ SCOPES = ["https://www.googleapis.com/auth/drive"]
 TOKEN_FILE = "token.json"
 CREDENTIALS_FILE = "credentials.json"
 
-class GoogleDriveHandler():
+class GDriveV3Wrapper():
     def __init__(
         self,
         token_file: str=TOKEN_FILE,
@@ -56,7 +57,7 @@ class GoogleDriveHandler():
         service = build('drive', 'v3', credentials=creds)
         return service
 
-    def _get_folder_id(self, folderName):
+    def getFolderId(self, folderName):
         try:
             self.verbose_print(f"Requesting id for folder name {folderName}")
             return (
@@ -74,14 +75,14 @@ class GoogleDriveHandler():
             print(f"An error occured when requesting drive folder id for name {folderName}")
             raise e
 
-    def _get_file_id(self, fileName, folderId):
-        self.verbose_print(f"Requesting id for file name {folderName} and folder id {folderId}")
+    def getFileId(self, fileName, folderId):
+        self.verbose_print(f"Requesting id for file name {fileName} and folder id {folderId}")
         try:
             return (
                 self.service
                 .files()
                 .list(
-                    q=f"mimeType = 'application/vnd.google-apps.file' and name = '{folderName}' and '{folderId}' in parents",
+                    q=f"mimeType = 'application/vnd.google-apps.file' and name = '{fileName}' and '{folderId}' in parents",
                     pageSize=10, 
                     fields="nextPageToken, files(id, name)"
                 ).execute()
@@ -89,13 +90,12 @@ class GoogleDriveHandler():
                 .get("id")
             )
         except Exception as e:
-            print(f"An error occured when requesting drive folder id for name {folderName}")
+            print(f"An error occured when requesting fileId for name {fileName}")
             raise e
 
     def listFile(self, folderName):
-        self.verbose_print(f"listing file in {folderName}")
         if not folderName in self.folderIdsMap.keys():
-            self.folderIdsMap[folderName] = self._get_folder_id(folderName)
+            self.folderIdsMap[folderName] = self.getFolderId(folderName)
         folderId = self.folderIdsMap[folderName]
         try:
             return (
@@ -112,16 +112,11 @@ class GoogleDriveHandler():
             print(f"An error occured when listing drive files in folder with name {folderName} and id {folderId}")
             raise e
 
-    def download_file(self, localdir, fileName=None, fileId=None, folderId=""):
-        assert (fileName is not None and folderId is not None) or fileId is not None, f"must provide either folderId and folderName or fileId"
-        if fileId is None:
-            fileId = self._get_file_id(fileName, folderId)
-        if fileName is None:
-            fileName = self.service.files().get(fileId=fileId).exectue()["name"]
-            dest = os.path.join(localdir, fileName)
-        self.verbose_print(f"Deleting file with id {fileId} to {dest}")
+    def downloadFile(self, localdir, fileId, fileName):
+        dest = os.path.join(localdir, fileName)
+        self.verbose_print(f"Downloading file with id {fileId} to {dest}")
         try:
-            request = service.files().get_media(fileId=file_id)
+            request = self.service.files().get_media(fileId=fileId)
             file = io.BytesIO()
             downloader = MediaIoBaseDownload(file, request)
             done = False
@@ -134,66 +129,10 @@ class GoogleDriveHandler():
             print(F'An error occurred during download of file with id {fileId}')
             raise e
 
-    def deleteFile(self, fileName=None, fileId=None, folderId=""):
-        assert (fileName is not None and folderId is not None) or fileId is not None, f"must provide either folderId and folderName or fileId"
-        if fileId is None:
-            fileId = self._get_file_id(fileName, folderId)
+    def deleteFile(self, fileId):
         self.verbose_print(f"Deleting file with id {fileId}")
         try:
-            self.service.file().delete(fileId)
+            self.service.files().delete(fileId=fileId)
         except Exception as e:
             print(f"An error occured when deleting file with fileId {fileId}")
             raise e
-
-def connect_drive():
-    creds = None
-    # Check for tokens
-    if os.path.exists("token.json"):
-        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-    # Get token through login
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(
-                'credentials.json', SCOPES)
-            creds = flow.run_local_server(port=0)
-        # Save the credentials for the next run
-        with open('token.json', 'w') as token:
-            token.write(creds.to_json())
-    # builg drive service
-    try:
-        service = build('drive', 'v3', credentials=creds)
-    except HttpError as error:
-        print(f'An error occurred: {error}')
-    return service
-
-def get_drivefolderid(service, folderName):
-    try:
-        return (service.files()
-            .list(q = "mimeType = 'application/vnd.google-apps.folder' and name = 'geeExports'", pageSize=10, fields="nextPageToken, files(id, name)").execute())
-        folderIdResult = folderId.get("files", [])
-        folderId = folderIdResult[0].get("id")
-    except Exception as e:
-        print(f"An error occured when requesting drive folder id for name {folderName}")
-        raise e
-    return folderId
-
-
-if __name__ == "__main__":
-    service = connect_drive()
-    with open("drive.log", "w") as f:
-        f.write("Service object type: {}".format(type(service)))
-        f.write("Service object class: {}".format(service.__class__.__name__))
-        f.write("Service object members: {}".format(dir(service)))
-        f.write("Service object attributes: {}".format(vars(service)))
-        f.write("has ListFile: {}".format(hasattr(service, "ListFile")))
-        f.write("has CreateFile: {}".format(hasattr(service, "CreateFile")))
-    print(service.files())
-    folderId = service.files().list(q = "mimeType = 'application/vnd.google-apps.folder' and name = 'geeExports'", pageSize=10, fields="nextPageToken, files(id, name)").execute()
-    print("FolderId", folderId)
-    folderIdResult = folderId.get("files", [])
-    print("FolderIdResult", folderIdResult)
-    folderId = folderIdResult[0].get("id")
-    print("FolderId", folderId)
-    fileIds 

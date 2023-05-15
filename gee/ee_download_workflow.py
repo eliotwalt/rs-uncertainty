@@ -4,7 +4,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 
 import ee
-ee.Initialize(project="ee-walteliot") #if authentication needs to be refresehd: run earthengine authenticate --> if accessing from remote: copy output to your pc and follow instructions (you need gcloud instaalled on your PC for this)
+ee.Initialize() #if authentication needs to be refresehd: run earthengine authenticate --> if accessing from remote: copy output to your pc and follow instructions (you need gcloud instaalled on your PC for this)
 import geetools 
 
 import time

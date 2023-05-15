@@ -1,9 +1,10 @@
-project_id: "498"
+projects: ["498"]
 verbose: true
 data:
   gt_dir: "assets/data/preprocessed"
   gt_data_bands: [1, 2, 3, 4, 5]
   shapefile_paths: ['assets/data/NHM_projectDekning_AOI_edit2015_V2.shp', 'assets/data/ALS_projects_Dz_all_norway.shp']
+  target_crs: "EPSG:4326"
 gee:
   token_file: "token.json"
   credentials_file: "credentials.json"
