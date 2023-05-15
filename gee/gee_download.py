@@ -1,7 +1,10 @@
-import ee
+import ee, os
+from pathlib import Path
 from datetime import datetime
 from tqdm import tqdm
 import time
+import rasterio
+import rasterio.warp
 from gdrive_handler import GDriveV3Wrapper
 
 class GEELocalDownloader:
@@ -21,7 +24,7 @@ class GEELocalDownloader:
         self.drive = GDriveV3Wrapper(token_file, credentials_file, gdrive_scopes, verbose)
         self.crs = crs
         self.gee_project = gee_project
-        self.verbose = verbose 
+        self.verbose = verbose
 
     def verbose_print(self, msg):
         if self.verbose: print(msg)
@@ -30,6 +33,7 @@ class GEELocalDownloader:
         self,
         polygon: list,
         gt_date: datetime,
+        gt_file: rasterio.io.DatasetReader,
         date_offset_amount: int, 
         date_offset_unit: str="day",
         date_offset_policy: str="both", # (before, after, both)
@@ -38,8 +42,13 @@ class GEELocalDownloader:
         mosaic: bool=False
     ):
         # 1. Define Polygon
-        self.verbose_print(f"Creating polygon from {len(polygon[0])} edges...")
-        aoi = ee.Geometry.Polygon(polygon, proj=ee.Projection(self.crs))
+        if len(polygon[0][0])>2:
+            self.verbose_print(f"Creating polygon from {len(polygon[0])} edges...")
+            aoi = ee.Geometry.Polygon(polygon[0], proj=ee.Projection(self.crs))
+        elif len(polygon[0][0])==2:
+            self.verbose_print(f"Creating rectangle from {polygon[0]}...")
+            aoi = ee.Geometry.Rectangle(polygon[0][0], proj=ee.Projection(self.crs))
+        else: raise ValueError(f"Unsupported geometry")
         # 2. Define dates
         gt_date = ee.Date(gt_date)
         if date_offset_policy == "before":
@@ -60,7 +69,7 @@ class GEELocalDownloader:
         if mosaic:
             icol = self.merge_image_collection_by_date(icol)
         self.verbose_print(f"Found {icol.size().getInfo()} images")
-        return icol
+        return icol, aoi
 
     def merge_image_collection_by_date(self, imgCol):
         '''
@@ -101,7 +110,6 @@ class GEELocalDownloader:
                 # filter tasks
                 if not task["description"] in [t["config"]["description"] for t in tasks]: continue
                 # ready/not ready
-                print(f'[d:104] task state: {task["state"]}')
                 if task["state"] == "COMPLETED": ready.add(task["description"])
             return list(ready)
         def copy_and_delete(drive, drivefolder, localdir, names_list=None):
@@ -118,18 +126,20 @@ class GEELocalDownloader:
                         successes.append(imageName)
                     except Exception as e:
                         print(f"Could not delete file with id {fileId}.")
-                        raise e
+                        print(e)
                 except Exception as e:
                     print(f"Download of file with id {fileId} failed.")
                     print(e)
             return successes
+        paths = []
         while len(tasks)>0:
             time.sleep(5)
             to_download = get_downloadable_tasks(tasks)
-            self.verbose_print(f'Remaining tasks: {[task["config"]["description"] for task in tasks]}, Downlodable tasks: {to_download}')
+            self.verbose_print(f'Remaining tasks: {len(tasks)}, Downlodable tasks: {len(to_download)}')
             success = copy_and_delete(self.drive, drivefolder, localdir, to_download)
-            self.verbose_print(f"Successfully downloaded: {success}")
-            tasks = [task for task in tasks if task["config"]["description"] not in to_download+success]
+            tasks = [task for task in tasks if task["config"]["description"] not in success]
+            paths.extend(list(set([os.path.join(localdir, s+".tif") for s in success])))
+        return paths
 
     def cast(self, image, dtype):    
         return {
@@ -148,15 +158,15 @@ class GEELocalDownloader:
             "uint32": image.toUint32()
         }[dtype]
 
-    def download_image(self, image, fn_prefix, drivefolder, polygon, dtype, scale):
+    def download_image(self, image, fn_prefix, drivefolder, geometry, dtype, scale):
         projection = ee.Projection(self.crs)
         image = self.cast(ee.Image(image), dtype)
-        fn = fn_prefix+"{}".format(image.id().getInfo().split("_")[0])
+        fn = fn_prefix+"{}-{}".format(image.id().getInfo().split("_")[0], datetime.now().strftime("%Y%d%mT%H%M%S"))
         task = ee.batch.Export.image.toDrive(
             image=image,
             description=fn,
             fileNamePrefix=fn,
-            region=polygon,
+            region=geometry,
             crs=projection.getInfo()["crs"],
             crs_transform=projection.getInfo()["transform"],
             folder=drivefolder,
@@ -164,24 +174,57 @@ class GEELocalDownloader:
             scale=scale
         )
         task.start()
-        self.verbose_print(f"Submitting image {fn}, taskId={task.id}...")
+        self.verbose_print(f"Submitting image {fn}, taskId={task.id}")
         return vars(task)
 
-    def download_image_collection(self, icol, fn_prefix, drivefolder, batch, polygon, dtype, scale, localdir): 
+    def download_image_collection(self, icol, fn_prefix, drivefolder, batch, geometry, dtype, scale, localdir): 
         # Transform to list
         n = icol.size().getInfo()
         ilist = icol.toList(n)
         # Task start loop
+        paths = set()
         tasks = []
         for i in range(n):
-            task = self.download_image(ilist.get(i), fn_prefix, drivefolder, polygon, dtype, scale)
+            task = self.download_image(ilist.get(i), fn_prefix, drivefolder, geometry, dtype, scale)
             tasks.append(task)
             # sequential download
             if not batch:
-                self.copy_drive([task], drivefolder, localdir)
-            break
+                ps = self.copy_drive([task], drivefolder, localdir)
+                for p in ps: paths.add(p)
         # parallel download and/or make sure all downloaded
-        self.copy_drive(tasks, drivefolder, localdir)
+        ps = self.copy_drive(tasks, drivefolder, localdir)
+        for p in ps: paths.add(p)
+        return list(paths)
+
+    def reproject(self, paths, gt_file):
+        def reproject_raster(src_path, gt_file):
+            src_file = rasterio.open(src_path)
+            print(f"Reprojecting {src_path} from {src_file.crs} to {gt_file.crs}")
+            print(f"Src file has crs: {src_file.crs}")
+            transform, width, height = rasterio.warp.calculate_default_transform(
+                src_file.crs, gt_file.crs, src_file.width, src_file.height, *src_file.bounds)
+            kwargs = src_file.meta.copy()
+            kwargs.update({
+                "crs": gt_file.crs,
+                "transform": transform,
+                "width": gt_file.shape[1],
+                "height": gt_file.shape[0]
+            })
+            dst_path = str(src_path).replace(Path(src_path).stem, Path(src_path).stem+"_reprojected")
+            dst_file = rasterio.open(dst_path, "w", **kwargs)
+            for i in range(1, src_file.count+1):
+                rasterio.warp.reproject(
+                    source=rasterio.band(src_file, i),
+                    destination=rasterio.band(dst_file, i),
+                    src_crs=src_file.crs,
+                    dst_crs=gt_file.crs,
+                    resampling=rasterio.warp.Resampling.bilinear
+                )
+            src_file.close()
+            dst_file.close()
+        for path in paths: 
+            self.verbose_print(f"Reprojecting {path} to {gt_file.crs}")
+            reproject_raster(path, gt_file)
 
     def download_timeserie(
         self, 
@@ -189,6 +232,8 @@ class GEELocalDownloader:
         project_id: str,
         polygon: list,
         gt_date: datetime,
+        gt_file: rasterio.io.DatasetReader,
+        reproject_to_gt_crs: bool,
         date_offset_amount: int, 
         date_offset_unit: str="day",
         date_offset_policy: str="both", # (before, after, both)
@@ -200,7 +245,6 @@ class GEELocalDownloader:
         mosaic: bool=False, # if True mosaic same dates
         dtype: str="uint16",
         scale: int=10,
-        verbose: bool=False,
     ):
         assert date_offset_policy in ["before", "after", "both"], f'Invalid date_offset_policy: {date_offset_policy}. Value must be in {["before", "after", "both"]}.'
         assert date_offset_amount >= 0, f'date_offset_amount must be positive'
@@ -214,9 +258,10 @@ class GEELocalDownloader:
         fn_prefix = f'{project_id}-GEE_{collection_name.replace("/", "_")}-'
         
         # Create ImageCollection
-        icol = self.get_image_collection(
+        icol, geometry = self.get_image_collection(
             polygon,
             gt_date,
+            gt_file,
             date_offset_amount,
             date_offset_unit,
             date_offset_policy,
@@ -224,12 +269,15 @@ class GEELocalDownloader:
             s2_bands,
             mosaic
         )
-
         # Apply aggregation
         if agg is not None:
             img = self.aggregate_image_collection(icol, agg)
-            self.download_image(img, fn_prefix, drivefolder, polygon, dtype, scale)
+            task = self.download_image(img, fn_prefix, drivefolder, geometry, dtype, scale)
+            paths = self.copy_drive([task], drivefolder, localdir)
         
         # Download image collection
         else:
-            self.download_image_collection(icol, fn_prefix, drivefolder, batch, polygon, dtype, scale, localdir)
+            paths = self.download_image_collection(icol, fn_prefix, drivefolder, batch, geometry, dtype, scale, localdir)
+
+        # Reproject
+        if reproject_to_gt_crs: self.reproject(paths, gt_file)

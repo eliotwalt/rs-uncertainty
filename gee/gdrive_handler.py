@@ -59,7 +59,6 @@ class GDriveV3Wrapper():
 
     def getFolderId(self, folderName):
         try:
-            self.verbose_print(f"Requesting id for folder name {folderName}")
             return (
                 self.service
                 .files()
@@ -132,7 +131,7 @@ class GDriveV3Wrapper():
     def deleteFile(self, fileId):
         self.verbose_print(f"Deleting file with id {fileId}")
         try:
-            self.service.files().delete(fileId=fileId)
+            self.service.files().delete(fileId=fileId).execute()
         except Exception as e:
             print(f"An error occured when deleting file with fileId {fileId}")
             raise e

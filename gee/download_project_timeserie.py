@@ -22,14 +22,16 @@ for project in cfg["projects"]:
     data_cfg = cfg["data"]
     data_cfg["project_id"] = project
     if cfg["verbose"]: print("Loading data for project ", project)
-    gt_file, _, gt_date, gt_crs, polygon, _ = get_project_data(**data_cfg)
+    gt_file, _, gt_date, gt_crs, polygon, bbox = get_project_data(**data_cfg)
     projectdir = os.path.join(localdir, project)
     Path(projectdir).mkdir(parents=True, exist_ok=True)
     ts_cfg.update({
         "project_id": project,
         "localdir": projectdir,
-        "polygon": polygon,
-        "gt_date": gt_date
+        # "polygon": polygon,
+        "polygon": bbox,
+        "gt_date": gt_date,
+        "gt_file": gt_file,
     })
     geedl.download_timeserie(**ts_cfg)
 

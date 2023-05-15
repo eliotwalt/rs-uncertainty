@@ -51,6 +51,9 @@ def get_project_data(
             break
         except IndexError: pass 
     if polygon is None: print("No polygon found")
-    print("reprojecting polygon", crs, "->", target_crs)
     polygon = rasterio.warp.transform_geom(src_crs=crs, dst_crs=target_crs, geom=polygon)
-    return gt_file, gt, gt_date, gt_file.crs, polygon["coordinates"], bounds
+    bbox = {"geometries": None, "type": "Polygon", "coordinates": [[(bounds.left, bounds.bottom), (bounds.right, bounds.top)]]}
+    bbox = rasterio.warp.transform_geom(src_crs=gt_file.crs, dst_crs=target_crs, geom=bbox)
+    # change order of coords
+    bbox["coordinates"][0] = [bbox["coordinates"][0][:2]]
+    return gt_file, gt, gt_date, gt_file.crs, polygon["coordinates"], bbox["coordinates"]
