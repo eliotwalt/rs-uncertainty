@@ -19,8 +19,8 @@ timeserie:
   date_offset_amount: 100 # 180
   date_offset_unit: "day"
   date_offset_policy: "both" # (before, after, both)
-  collection_name: "COPERNICUS/S2_SR" #"COPERNICUS/S2_SR_HARMONIZED"
-  s2_bands: ['B1','B2','B3','B4','B5','B6','B7','B8','B8A', 'B9', 'B11','B12', 'QA60'] #['B1','B2','B3','B4','B5','B6','B7','B8','B8A', 'B9', 'B11','B12','MSK_CLDPRB']
+  collection_name: "COPERNICUS/S2_SR_HARMONIZED"
+  s2_bands: ['B1','B2','B3','B4','B5','B6','B7','B8','B8A', 'B9', 'B11','B12','MSK_CLDPRB']
   drivefolder: "geeExports"
   batch: true # if false, sequential dl o/w parallel
   agg: null # if None, raw images, o/w compute agg

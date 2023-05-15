@@ -76,6 +76,7 @@ class GEELocalDownloader:
         function that merges images together that have the same date. 
         adapted from: https://gis.stackexchange.com/questions/372744/how-to-create-a-loop-which-creates-single-mosaic-images-for-each-day-from-a-sel
         '''    
+        self.verbose_print(f"Creating mosaic...")
         #Convert the image collection to a list.
         imgList = imgCol.toList(imgCol.size())        
         # Driver function for mapping the unique dates
@@ -135,7 +136,7 @@ class GEELocalDownloader:
         while len(tasks)>0:
             time.sleep(5)
             to_download = get_downloadable_tasks(tasks)
-            self.verbose_print(f'Remaining tasks: {len(tasks)}, Downlodable tasks: {len(to_download)}')
+            self.verbose_print(f'Remaining tasks: {len(tasks)}, Downloadable tasks: {len(to_download)}')
             success = copy_and_delete(self.drive, drivefolder, localdir, to_download)
             tasks = [task for task in tasks if task["config"]["description"] not in success]
             paths.extend(list(set([os.path.join(localdir, s+".tif") for s in success])))
@@ -160,8 +161,8 @@ class GEELocalDownloader:
 
     def download_image(self, image, fn_prefix, drivefolder, geometry, dtype, scale):
         projection = ee.Projection(self.crs)
-        image = self.cast(ee.Image(image), dtype)
-        fn = fn_prefix+"{}-{}".format(image.id().getInfo().split("_")[0], datetime.now().strftime("%Y%d%mT%H%M%S"))
+        image = self.cast(ee.Image(image).clip(geometry), dtype)
+        fn = fn_prefix+"{}-{}".format(image.id().getInfo().split("_")[0], datetime.now().strftime("%Y%d%mT%H%M%S"))+"_withClip" # DEBUG
         task = ee.batch.Export.image.toDrive(
             image=image,
             description=fn,
