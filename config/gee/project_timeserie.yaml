@@ -1,4 +1,4 @@
-projects: ["498"]
+projects: ["764", "415", "988"]
 verbose: true
 data:
   gt_dir: "assets/data/preprocessed"
@@ -16,7 +16,7 @@ timeserie:
   # timeseries parameters
   localdir: "gee_data"
   reproject_to_gt_crs: true
-  date_offset_amount: 100 # 180
+  date_offset_amount: 10 # 180
   date_offset_unit: "day"
   date_offset_policy: "both" # (before, after, both)
   collection_name: "COPERNICUS/S2_SR_HARMONIZED"

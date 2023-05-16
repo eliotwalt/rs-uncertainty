@@ -35,6 +35,7 @@ class GDriveV3Wrapper():
     def getService(self):
         self.verbose_print("Connecting to google drive...")
         # Check for tokens
+        creds = None
         if os.path.exists(self.token_file):
             self.verbose_print(f"Trying token in {self.token_file}...")
             creds = Credentials.from_authorized_user_file(self.token_file, SCOPES)
@@ -74,6 +75,7 @@ class GDriveV3Wrapper():
             print(f"An error occured when requesting drive folder id for name {folderName}")
             raise e
 
+    # To fix: returns empty list for some reason
     def getFileId(self, fileName, folderId):
         self.verbose_print(f"Requesting id for file name {fileName} and folder id {folderId}")
         try:
@@ -82,7 +84,7 @@ class GDriveV3Wrapper():
                 .files()
                 .list(
                     q=f"mimeType = 'application/vnd.google-apps.file' and name = '{fileName}' and '{folderId}' in parents",
-                    pageSize=10, 
+                    pageSize=100, 
                     fields="nextPageToken, files(id, name)"
                 ).execute()
                 .get("files", [])[0]
@@ -127,6 +129,7 @@ class GDriveV3Wrapper():
         except Exception as  e:
             print(F'An error occurred during download of file with id {fileId}')
             raise e
+        return dest
 
     def deleteFile(self, fileId):
         self.verbose_print(f"Deleting file with id {fileId}")
@@ -135,3 +138,15 @@ class GDriveV3Wrapper():
         except Exception as e:
             print(f"An error occured when deleting file with fileId {fileId}")
             raise e
+        
+if __name__ == "__main__":
+    drive = GDriveV3Wrapper()
+    folderId = drive.getFolderId("geeExports")
+    filename = "764-GEE_COPERNICUS_S2_SR_HARMONIZED-20170821T104021-20231605T182845.tif"
+    driveFiles = drive.listFile("geeExports")
+    fileId = [f.get("id") for f in driveFiles][[f.get("name") for f in driveFiles].index(filename)]
+    path = drive.downloadFile(fileId=fileId, localdir="gee_data", fileName="dlmain-"+filename)
+    print(path)
+    drive.deleteFile(fileId)
+    driveFiles = drive.listFile("geeExports")
+    print(filename in [f.get("name") for f in driveFiles])

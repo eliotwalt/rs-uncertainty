@@ -16,17 +16,6 @@ def parse_gt_date(date_str) -> datetime:
     try: return datetime.strptime(date_str, "%Y-%m-%d")
     except: return datetime.strptime(date_str, "%Y/%m/%d")
 
-def configure(project_id, root="/scratch/ewalt/pdm/rs-uncertainty/"):
-    return {
-        "project_id": project_id,
-        "gt_dir": pjoin(root, "assets/data/preprocessed"),
-        "gt_data_bands": [1, 2, 3, 4, 5],
-        "shapefile_paths": [
-            pjoin(root, p) for p in 
-            ['assets/data/NHM_projectDekning_AOI_edit2015_V2.shp', 'assets/data/ALS_projects_Dz_all_norway.shp']
-        ],
-    }
-
 def get_project_data(
     project_id,
     gt_dir,
@@ -35,7 +24,8 @@ def get_project_data(
     target_crs="EPSG:4326",
 ):
     # Get gt
-    gt_file = rasterio.open(pjoin(gt_dir, project_id+".tif"))
+    gt_path = pjoin(gt_dir, project_id+".tif")
+    gt_file = rasterio.open(gt_path)
     gt = gt_file.read(gt_data_bands)
     bounds = gt_file.bounds
     # Load shapefiles
@@ -55,5 +45,5 @@ def get_project_data(
     bbox = {"geometries": None, "type": "Polygon", "coordinates": [[(bounds.left, bounds.bottom), (bounds.right, bounds.top)]]}
     bbox = rasterio.warp.transform_geom(src_crs=gt_file.crs, dst_crs=target_crs, geom=bbox)
     # change order of coords
-    bbox["coordinates"][0] = [bbox["coordinates"][0][:2]]
-    return gt_file, gt, gt_date, gt_file.crs, polygon["coordinates"], bbox["coordinates"]
+    bbox["coordinates"] = bbox["coordinates"][0][:2]
+    return gt_path, gt_file, gt, gt_date, gt_file.crs, polygon["coordinates"], bbox["coordinates"]

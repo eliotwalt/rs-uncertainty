@@ -1,11 +1,110 @@
 import ee, os
+import geetools
+from geetools.utils import makeName
+from geetools import tools
+from geetools.batch import utils
 from pathlib import Path
 from datetime import datetime
 from tqdm import tqdm
 import time
-import rasterio
-import rasterio.warp
+from osgeo import gdal
 from gdrive_handler import GDriveV3Wrapper
+
+def downloadGEETasks(drive, tasks, filenames, drive_folder, local_folder, verbose=False):
+    paths = []
+    while len(tasks)>0:
+        time.sleep(2)
+        if verbose: print(f"Remaining tasks: {len(tasks)}, Remaining files: {len(filenames)}, Downloaded tasks: {len(paths)}")
+        try: driveFiles = drive.listFile(folderName=drive_folder)
+        except Exception as e: 
+            print(e)
+            continue
+        # print(f"Files on drive: {[f.get('id') for f in driveFiles]}")
+        for file in driveFiles:
+            fileId, filename = file.get("id"), file.get("name")
+            filestem = Path(filename).stem
+            # print(f"current file: stem={filestem}, name={filename}")
+            # print(f"taget stems: {filenames}")
+            # print("should match:", filestem in filenames)
+            if filestem in filenames:
+                index = filenames.index(filestem)
+                task = tasks[index]
+                # print(f"[d:23] found match: filename={filename}, fileId={fileId}, taskId={task.id}")
+                try:
+                    # print(f"Downloading and deleting {drive_folder}/{filename} from drive")
+                    path = drive.downloadFile(fileId=fileId, localdir=local_folder, fileName=filename)
+                    try:
+                        drive.deleteFile(fileId)
+                        tasks.remove(task)
+                        filenames.remove(filestem)
+                        paths.append(path)
+                    except Exception as e:
+                        print(f"Could not delete file: fileId={fileId}, filename={filename}")
+                        print(e)
+                except Exception as e:
+                    print(f"Could not download task: taskId={task.id}, filename={filename}")
+                    print(e)
+    return paths
+
+def exportImageCollectionToDrive(
+    collection, 
+    fn_prefix, 
+    folder, 
+    scale, 
+    datatype, 
+    region, 
+    crs, 
+    verbose=False, 
+    **kwargs
+):
+    """
+    Slight modification of geetools.batch.Export.imagecollection.toDrive to use a filename prefix 
+    to define the name property when exporting images
+    """
+    # compat
+    namePattern='{id}'
+    datePattern=None
+    extra=None
+    dataType=datatype
+    # empty tasks list
+    tasklist, filenames = [], []
+    # get region
+    if region:
+        region = tools.geometry.getRegion(region)
+    # Make a list of images
+    img_list = collection.toList(collection.size())
+    n = 0
+    while True:
+        try:
+            img = ee.Image(img_list.get(n))
+            name = fn_prefix+"{}-{}".format(
+                img.id().getInfo().split("_")[0], 
+                datetime.now().strftime("%Y%d%mT%H%M%S"))
+            description = utils.matchDescription(makeName(img, namePattern, datePattern, extra).getInfo())
+            # convert data type
+            img = utils.convertDataType(dataType)(img)
+            if region is None:
+                region = tools.geometry.getRegion(img)
+            task = ee.batch.Export.image.toDrive(image=img,
+                                                 description=description,
+                                                 folder=folder,
+                                                 fileNamePrefix=name,
+                                                 region=region,
+                                                 scale=scale,
+                                                 crs=crs,
+                                                 **kwargs)
+            task.start()
+            if verbose: print(f"Submitted new task: taskId={task.id}, name={name}, description={description}")
+            tasklist.append(task)
+            filenames.append(name)
+            n += 1
+        except Exception as e:
+            error = str(e).split(':')
+            if error[0] == 'List.get': 
+                if verbose: print(f"Reached end of image list at index: {n}")
+                break
+            else: raise e
+    return tasklist, filenames
 
 class GEELocalDownloader:
     def __init__(
@@ -28,48 +127,6 @@ class GEELocalDownloader:
 
     def verbose_print(self, msg):
         if self.verbose: print(msg)
-
-    def get_image_collection(
-        self,
-        polygon: list,
-        gt_date: datetime,
-        gt_file: rasterio.io.DatasetReader,
-        date_offset_amount: int, 
-        date_offset_unit: str="day",
-        date_offset_policy: str="both", # (before, after, both)
-        collection_name: str="COPERNICUS/S2_SR_HARMONIZED",
-        s2_bands: list=['B1','B2','B3','B4','B5','B6','B7','B8','B8A', 'B9', 'B11','B12','MSK_CLDPRB'],
-        mosaic: bool=False
-    ):
-        # 1. Define Polygon
-        if len(polygon[0][0])>2:
-            self.verbose_print(f"Creating polygon from {len(polygon[0])} edges...")
-            aoi = ee.Geometry.Polygon(polygon[0], proj=ee.Projection(self.crs))
-        elif len(polygon[0][0])==2:
-            self.verbose_print(f"Creating rectangle from {polygon[0]}...")
-            aoi = ee.Geometry.Rectangle(polygon[0][0], proj=ee.Projection(self.crs))
-        else: raise ValueError(f"Unsupported geometry")
-        # 2. Define dates
-        gt_date = ee.Date(gt_date)
-        if date_offset_policy == "before":
-            start_date = gt_date.advance(-date_offset_amount, date_offset_unit)
-            end_date = gt_date
-        elif date_offset_policy == "after":
-            start_date = gt_date
-            end_date = gt_date.advance(date_offset_amount, date_offset_unit)
-        else:
-            start_date = gt_date.advance(-date_offset_amount, date_offset_unit)
-            end_date = gt_date.advance(date_offset_amount, date_offset_unit)
-        self.verbose_print(f"Date filter: {start_date.format('dd.MM.yyyy').getInfo()} - {end_date.format('dd-MM-yyyy').getInfo()}")
-        # 3. Get image collection
-        icol = (ee.ImageCollection(collection_name)
-             .filterBounds(aoi)
-             .filterDate(start_date, end_date)
-             .select(s2_bands))
-        if mosaic:
-            icol = self.merge_image_collection_by_date(icol)
-        self.verbose_print(f"Found {icol.size().getInfo()} images")
-        return icol, aoi
 
     def merge_image_collection_by_date(self, imgCol):
         '''
@@ -103,137 +160,122 @@ class GEELocalDownloader:
         agg_img = eval(f"icol.{agg}()")
         return agg_img
     
-    def copy_drive(self, tasks, drivefolder, localdir):
-        def get_downloadable_tasks(tasks):
-            ready = set()
-            tasklist = ee.data.getTaskList()
-            for task in tasklist:
-                # filter tasks
-                if not task["description"] in [t["config"]["description"] for t in tasks]: continue
-                # ready/not ready
-                if task["state"] == "COMPLETED": ready.add(task["description"])
-            return list(ready)
-        def copy_and_delete(drive, drivefolder, localdir, names_list=None):
-            successes = []
-            for file in drive.listFile(folderName=drivefolder):
-                fileId, fileName = file.get("id"), file.get("name")
-                imageName = fileName.split(".")[0]
-                if names_list is not None and imageName not in names_list: continue
-                self.verbose_print(f"Found match on drive: fileName={fileName}, fileId={fileId}")
-                try:
-                    self.drive.downloadFile(localdir=localdir, fileId=fileId, fileName=fileName)
-                    try:
-                        self.drive.deleteFile(fileId=fileId)
-                        successes.append(imageName)
-                    except Exception as e:
-                        print(f"Could not delete file with id {fileId}.")
-                        print(e)
-                except Exception as e:
-                    print(f"Download of file with id {fileId} failed.")
-                    print(e)
-            return successes
-        paths = []
-        while len(tasks)>0:
-            time.sleep(5)
-            to_download = get_downloadable_tasks(tasks)
-            self.verbose_print(f'Remaining tasks: {len(tasks)}, Downloadable tasks: {len(to_download)}')
-            success = copy_and_delete(self.drive, drivefolder, localdir, to_download)
-            tasks = [task for task in tasks if task["config"]["description"] not in success]
-            paths.extend(list(set([os.path.join(localdir, s+".tif") for s in success])))
-        return paths
+    # def copy_drive(self, tasks, filenames, drivefolder, localdir):
+    #     def get_downloadable_tasks(tasks):
+    #         tasks_ids = [t.id for t in tasks]
+    #         ready = set()
+    #         tasklist = ee.data.getTaskList()
+    #         for task in tasklist:
+    #             if task.id in tasks_ids: ready.add(tasks_ids.index(task.id))
+    #         return list(ready)
+    #     def copy_and_delete(drive, drivefolder, localdir, filenames):
+    #         successes = []
+    #         for file in drive.listFile(folderName=drivefolder):
+    #             fileId, fileName = file.get("id"), file.get("name")
+    #             imageName = fileName.split(".")[0]
+    #             if names_list is not None and imageName not in names_list: continue
+    #             self.verbose_print(f"Found match on drive: fileName={fileName}, fileId={fileId}")
+    #             try:
+    #                 self.drive.downloadFile(localdir=localdir, fileId=fileId, fileName=fileName)
+    #                 try:
+    #                     self.drive.deleteFile(fileId=fileId)
+    #                     successes.append(imageName)
+    #                 except Exception as e:
+    #                     print(f"Could not delete file with id {fileId}.")
+    #                     print(e)
+    #             except Exception as e:
+    #                 print(f"Download of file with id {fileId} failed.")
+    #                 print(e)
+    #         return successes
+    #     paths = []
+    #     while len(tasks)>0:
+    #         time.sleep(5)
+    #         downloadable_ids = get_downloadable_tasks(tasks)
+    #         downloadable_filenames = [filenames[i] for i in downloadable_ids]
+    #         self.verbose_print(f'Remaining tasks: {len(tasks)}, Downloadable tasks: {len(downloadable_ids)}')
+    #         success = copy_and_delete(self.drive, drivefolder, localdir, downloadable_filenames)
+    #         tasks = [task for task in tasks if task["config"]["description"] not in success]
+    #         paths.extend(list(set([os.path.join(localdir, s+".tif") for s in success])))
+    #     return paths
 
-    def cast(self, image, dtype):    
-        return {
-            "float":image.toFloat(), 
-            "byte":image.toByte(), 
-            "int":image.toInt(),
-            "double":image.toDouble(),
-            "long": image.toLong(),
-            "short": image.toShort(),
-            "int8": image.toInt8(),
-            "int16": image.toInt16(),
-            "int32": image.toInt32(),
-            "int64": image.toInt64(),
-            "uint8": image.toUint8(),
-            "uint16": image.toUint16(),
-            "uint32": image.toUint32()
-        }[dtype]
+    # def download_image(self, image, fn_prefix, drivefolder, geometry, dtype, scale):
+    #     projection = ee.Projection(self.crs)
+    #     image = self.cast(ee.Image(image), dtype)#.clip(geometry)
+    #     fn = fn_prefix+"{}-{}".format(image.id().getInfo().split("_")[0], datetime.now().strftime("%Y%d%mT%H%M%S"))# +"_withClip" # DEBUG
+    #     task = ee.batch.Export.image.toDrive(
+    #         image=image,
+    #         description=fn,
+    #         fileNamePrefix=fn,
+    ##         region=geometry,
+    #         crs=projection.getInfo()["crs"],
+    #         crs_transform=projection.getInfo()["transform"],
+    #         folder=drivefolder,
+    #         fileFormat="GeoTIFF",
+    #         scale=scale
+    #     )
+    #     task.start()
+    #     self.verbose_print(f"Submitting image {fn}, taskId={task.id}")
+    #     return vars(task)
 
-    def download_image(self, image, fn_prefix, drivefolder, geometry, dtype, scale):
-        projection = ee.Projection(self.crs)
-        image = self.cast(ee.Image(image).clip(geometry), dtype)
-        fn = fn_prefix+"{}-{}".format(image.id().getInfo().split("_")[0], datetime.now().strftime("%Y%d%mT%H%M%S"))+"_withClip" # DEBUG
-        task = ee.batch.Export.image.toDrive(
-            image=image,
-            description=fn,
-            fileNamePrefix=fn,
-            region=geometry,
-            crs=projection.getInfo()["crs"],
-            crs_transform=projection.getInfo()["transform"],
-            folder=drivefolder,
-            fileFormat="GeoTIFF",
-            scale=scale
-        )
-        task.start()
-        self.verbose_print(f"Submitting image {fn}, taskId={task.id}")
-        return vars(task)
-
-    def download_image_collection(self, icol, fn_prefix, drivefolder, batch, geometry, dtype, scale, localdir): 
-        # Transform to list
-        n = icol.size().getInfo()
-        ilist = icol.toList(n)
-        # Task start loop
-        paths = set()
-        tasks = []
-        for i in range(n):
-            task = self.download_image(ilist.get(i), fn_prefix, drivefolder, geometry, dtype, scale)
-            tasks.append(task)
-            # sequential download
-            if not batch:
-                ps = self.copy_drive([task], drivefolder, localdir)
-                for p in ps: paths.add(p)
-        # parallel download and/or make sure all downloaded
-        ps = self.copy_drive(tasks, drivefolder, localdir)
-        for p in ps: paths.add(p)
-        return list(paths)
-
-    def reproject(self, paths, gt_file):
-        def reproject_raster(src_path, gt_file):
-            src_file = rasterio.open(src_path)
-            print(f"Reprojecting {src_path} from {src_file.crs} to {gt_file.crs}")
-            print(f"Src file has crs: {src_file.crs}")
-            transform, width, height = rasterio.warp.calculate_default_transform(
-                src_file.crs, gt_file.crs, src_file.width, src_file.height, *src_file.bounds)
-            kwargs = src_file.meta.copy()
-            kwargs.update({
-                "crs": gt_file.crs,
-                "transform": transform,
-                "width": gt_file.shape[1],
-                "height": gt_file.shape[0]
-            })
-            dst_path = str(src_path).replace(Path(src_path).stem, Path(src_path).stem+"_reprojected")
-            dst_file = rasterio.open(dst_path, "w", **kwargs)
-            for i in range(1, src_file.count+1):
-                rasterio.warp.reproject(
-                    source=rasterio.band(src_file, i),
-                    destination=rasterio.band(dst_file, i),
-                    src_crs=src_file.crs,
-                    dst_crs=gt_file.crs,
-                    resampling=rasterio.warp.Resampling.bilinear
-                )
-            src_file.close()
-            dst_file.close()
+    def reproject(self, paths, gt_path):
+        def _reproject(input_path, gt_path):
+            input_path = Path(input_path)
+            output_path = Path(str(input_path).replace(input_path.stem, input_path.stem+"_reprojected"))
+            with gdal.Open(gt_path) as gt_file:
+                proj_ = gt_file.GetProjectionRef()
+                warp_opts = gdal.WarpOptions(
+                    format="GTiff",
+                    dstSRS=proj_,
+                    xRes=10.0, yRes=-10.0)
+                x_ds = gdal.Warp(output_path, input_path, options=warp_opts)
+                x_ds = None 
         for path in paths: 
-            self.verbose_print(f"Reprojecting {path} to {gt_file.crs}")
-            reproject_raster(path, gt_file)
+            self.verbose_print(f"Reprojecting {path}")
+            _reproject(path, gt_path)
+
+    def get_image_collection(
+        self,
+        bbox: list,
+        gt_date: datetime,
+        date_offset_amount: int, 
+        date_offset_unit: str="day",
+        date_offset_policy: str="both", # (before, after, both)
+        collection_name: str="COPERNICUS/S2_SR_HARMONIZED",
+        s2_bands: list=['B1','B2','B3','B4','B5','B6','B7','B8','B8A', 'B9', 'B11','B12','MSK_CLDPRB'],
+        mosaic: bool=False
+    ):
+        # 1. Define Polygon
+        self.verbose_print(f"Creating rectangle from {bbox}...")
+        aoi = ee.Geometry.Rectangle(bbox, proj=ee.Projection(self.crs))
+        # 2. Define dates
+        gt_date = ee.Date(gt_date)
+        if date_offset_policy == "before":
+            start_date = gt_date.advance(-date_offset_amount, date_offset_unit)
+            end_date = gt_date
+        elif date_offset_policy == "after":
+            start_date = gt_date
+            end_date = gt_date.advance(date_offset_amount, date_offset_unit)
+        else:
+            start_date = gt_date.advance(-date_offset_amount, date_offset_unit)
+            end_date = gt_date.advance(date_offset_amount, date_offset_unit)
+        self.verbose_print(f"Date filter: {start_date.format('dd.MM.yyyy').getInfo()} - {end_date.format('dd-MM-yyyy').getInfo()}")
+        # 3. Get image collection
+        icol = (ee.ImageCollection(collection_name)
+             .filterBounds(aoi)
+             .filterDate(start_date, end_date)
+             .select(s2_bands))
+        if mosaic:
+            icol = self.merge_image_collection_by_date(icol)
+        self.verbose_print(f"Found {icol.size().getInfo()} images")
+        return icol, aoi
 
     def download_timeserie(
         self, 
         localdir: str,
         project_id: str,
-        polygon: list,
+        bbox: list,
         gt_date: datetime,
-        gt_file: rasterio.io.DatasetReader,
+        gt_path: str,
         reproject_to_gt_crs: bool,
         date_offset_amount: int, 
         date_offset_unit: str="day",
@@ -257,12 +299,11 @@ class GEELocalDownloader:
 
         # args
         fn_prefix = f'{project_id}-GEE_{collection_name.replace("/", "_")}-'
-        
+        print(fn_prefix)
         # Create ImageCollection
         icol, geometry = self.get_image_collection(
-            polygon,
+            bbox,
             gt_date,
-            gt_file,
             date_offset_amount,
             date_offset_unit,
             date_offset_policy,
@@ -278,7 +319,18 @@ class GEELocalDownloader:
         
         # Download image collection
         else:
-            paths = self.download_image_collection(icol, fn_prefix, drivefolder, batch, geometry, dtype, scale, localdir)
+            fn_prefix = f'{project_id}-GEE_{collection_name.replace("/", "_")}-'
+            tasks, filenames = exportImageCollectionToDrive(
+                collection=icol,
+                region=geometry,
+                folder=drivefolder,
+                scale=scale,
+                fn_prefix=fn_prefix,
+                datatype=dtype,
+                crs=self.crs,
+                verbose=self.verbose
+            )
+            paths = downloadGEETasks(self.drive, tasks, filenames, drivefolder, localdir, verbose=self.verbose)
 
         # Reproject
-        if reproject_to_gt_crs: self.reproject(paths, gt_file)
+        if reproject_to_gt_crs: self.reproject(paths, gt_path)
