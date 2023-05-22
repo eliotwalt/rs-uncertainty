@@ -13,6 +13,7 @@ from blowtorch import Run
 from tqdm import trange, tqdm
 import numpy as np
 import fiona
+import gdal
 import os
 import rasterio.warp
 import rasterio.features
@@ -22,7 +23,7 @@ from time import time
 import sys, os 
 root = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, root)
-from utils import split_list, RunningStats, CombinedStats
+from utils import split_list, RunningStats, CombinedStats, is_valid_rasters_offsets
 
 SEPARATOR = 65535
 
@@ -65,7 +66,8 @@ class ProjectsPreprocessor:
         self.split_map = split_map
         self.verbose = verbose
         self.patches_sampling_strategy_map = {
-            "valid_center": self._get_valid_center_patches
+            "valid_center": self._get_valid_center_patches,
+            "s2_offset_valid_center": self._get_s2_offset_valid_center_patches,
         }
         self.projects_stats = {}
         # verify run config
@@ -74,6 +76,7 @@ class ProjectsPreprocessor:
         self.run.seed_all(self.seed)
         # save directory
         self.save_dir = self.run["save_dir"]
+        Path(self.save_dir).mkdir(parents=True, exist_ok=True)
         # create dataset
         self.prange = trange
 
@@ -139,7 +142,7 @@ class ProjectsPreprocessor:
         project_projects_stats["gt_date"] = gt_date
         # read images
         images, image_ids, s2_images, s1_images_ascending, s1_images_descending = self._read_project_images(project_id)
-        project_projects_stats["s2_dates"] = [d for _, d in s2_images]
+        project_projects_stats["s2_dates"] = [d for _, d, _ in s2_images]
         project_projects_stats["s1_ascending_dates"] = [d for _, d in s1_images_ascending]
         project_projects_stats["s1_descending_dates"] = [d for _, d in s1_images_descending]
         project_projects_stats["num_s2_images"] = len(s2_images)
@@ -159,7 +162,6 @@ class ProjectsPreprocessor:
             image_ids,
             labels,
             gt_date,
-            self.run["testset_max_days_delta"]
         )
         # copy stats
         for k, v in patches_stats.items():
@@ -266,7 +268,7 @@ class ProjectsPreprocessor:
         # read s2
         for img_path in pjoin(self.run['s2_reprojected_dir'], project_id).glob('*.tif'):
             with rasterio.open(img_path) as fh:
-                s2_images.append((fh.read(fh.indexes), parse_date(img_path.stem.split('_')[3].split('T')[0])))
+                s2_images.append((fh.read(fh.indexes), parse_date(img_path.stem.split('_')[3].split('T')[0]), gdal.Open(str(img_path))))
         # read s1
         for img_path in pjoin(self.run['s1_reprojected_dir'], project_id).glob('*.tif'):
             with rasterio.open(img_path) as fh:
@@ -277,7 +279,7 @@ class ProjectsPreprocessor:
                 else:
                     raise ValueError(f'Could not extract orbit direction from filename: {img_path.name}')
                 s1_list.append((fh.read(fh.indexes), parse_date(img_path.stem.split('_')[5].split('T')[0])))
-        images = [img for img, _ in chain(s2_images, s1_images_ascending, s1_images_descending)]
+        images = [img for img, _, _ in s2_images]+[img for img, _ in chain(s1_images_ascending, s1_images_descending)]
         image_ids = [id(img) for img in images]
         return images, image_ids, s2_images, s1_images_ascending, s1_images_descending
     
@@ -302,7 +304,6 @@ class ProjectsPreprocessor:
         image_ids,
         labels,
         gt_date,
-        testset_max_days_delta,
     ): 
         """
         
@@ -336,10 +337,10 @@ class ProjectsPreprocessor:
                     valid_descending = [img for img in s1_images_descending if (img[0][:, i_slice, j_slice] > 8.).all()]
                     if len(valid_ascending) == 0 or len(valid_descending) == 0:
                         continue
-                    for s2_image, s2_date in s2_images:
+                    for s2_image, s2_date, s2_file in s2_images:
                         # do not add TEST images if the difference between s2_date and gt_date is greater than 
                         # the threshold `testset_max_days_delta` (if specified)
-                        if dataset == "test" and testset_max_days_delta is not None and abs((gt_date-s2_date).days > testset_max_days_delta):
+                        if dataset == "test" and self.run["testset_max_days_delta"] is not None and abs((gt_date-s2_date).days > self.run["testset_max_days_delta"]):
                             continue
                         # do not add image if an image of the same date has been added for this location before.
                         # this is the case e.g. for the overlap region between two adjacent S2 images, which is
@@ -365,6 +366,114 @@ class ProjectsPreprocessor:
                         if len(matching_ascending) and len(matching_descending):
                             images_for_pixel.append((s2_image, matching_ascending, matching_descending))
                             s2_dates_used.add(s2_date)
+                    num_images_per_pixel[0, i, j] = len(images_for_pixel)
+                    # a data point corresponds to one image coordinate, such that regions with higher number
+                    # of available images are not oversampled during training. Only add if there's at least one image
+                    # for that pixel.
+                    if len(images_for_pixel):
+                        data_point = (i, j, images_for_pixel, labels)
+                        # transform `images_for_pixel` into contiguos numpy array where images are referenced based on
+                        # their index in `images`
+                        this_loc_to_images_map = []
+                        for s2_image, s1_a_list, s1_d_list in images_for_pixel:
+                            this_loc_to_images_map.extend(
+                                [image_ids.index(id(s2_image)), self.separator]
+                                + [image_ids.index(id(img)) for img in s1_a_list]
+                                + [self.separator]
+                                + [image_ids.index(id(img)) for img in s1_d_list]
+                                + [self.separator]
+                            )
+                        # add sample stats to corresponding split
+                        locations[dataset].append((i, j))
+                        offsets[dataset].append(len(loc_to_images_map[dataset]))
+                        loc_to_images_map[dataset].extend(this_loc_to_images_map)
+        # save stats
+        stats["num_images_per_pixel"] = {
+            "mean": float(num_images_per_pixel.mean()), 
+            "min": float(num_images_per_pixel.min()),
+            "max": float(num_images_per_pixel.max()),
+        }
+        stats["num_train"] = len(locations["train"])
+        stats["num_val"] = len(locations['val'])
+        stats["num_test"] = len(locations['test'])
+        # save pkl
+        project_data, _ = self._save_project_patches(
+            project_id,
+            images,
+            locations,
+            loc_to_images_map,
+            offsets,
+            labels,
+        )
+        stats = self._compute_project_stats(
+            project_id,
+            stats,
+            project_data,
+        )
+        self._save_image_density(gt_file, project_id, num_images_per_pixel)
+        return stats
+
+    def _get_s2_offset_valid_center_patches(
+        self,
+        gt_file,
+        project_id,
+        split_mask,
+        rasterized_polygon,
+        valid_mask,
+        s1_images_ascending,
+        s1_images_descending,
+        s2_images,
+        images,
+        image_ids,
+        labels,
+        gt_date,
+    ): 
+        """
+        
+        """
+        # variables
+        stats = {}
+        locations = defaultdict(list)
+        loc_to_images_map = defaultdict(list)
+        offsets = defaultdict(list)
+        shape = gt_file.shape
+        num_images_per_pixel = np.zeros((1, *shape), dtype=np.uint8)
+        patch_half = self.run['patch_size'] // 2
+        gt_ds = gdal.Open(str(gt_file.name))
+        for i in self.prange(patch_half, gt_file.shape[0] - patch_half):
+        # for i in range(patch_half, gt_file.shape[0] - patch_half):
+            # if i==10: break # DEBUG
+            for j in range(patch_half, gt_file.shape[1] - patch_half):
+                i_slice = slice(i - patch_half, i + patch_half + 1)
+                j_slice = slice(j - patch_half, j + patch_half + 1)
+                # no is same split as only test!
+                is_in_polygon = (rasterized_polygon[i_slice, j_slice] == 1).all()
+                # Ignore pixels that span over multiple splits and lie completly in their polygon
+                if is_in_polygon and valid_mask[i,j]:
+                    dataset = self.split_map[int(split_mask[i,j])]
+                    images_for_pixel: List[Tuple[np.ndarray, List[np.ndarray], List[np.ndarray]]] = []
+                    # filter out s1 images which contain a nodata pixel in the patch, i.e. images which do
+                    # not fully cover the patch. We noticed that some s1 images have weird stripes with
+                    # values close to (but not exactly) zero near the swath edge. Therefore we empirically
+                    # set the threshold value to 8.
+                    valid_ascending = [img for img in s1_images_ascending if (img[0][:, i_slice, j_slice] > 8.).all()]
+                    valid_descending = [img for img in s1_images_descending if (img[0][:, i_slice, j_slice] > 8.).all()]
+                    if len(valid_ascending) == 0 or len(valid_descending) == 0:
+                        continue
+                    for s2_image, s2_date, s2_ds in s2_images:
+                        # only add patch if there is no nodata pixel contained, where a nodata pixel is
+                        # defined as having zeros across all channels.
+                        if (s2_image[:, i_slice, j_slice] == 0.).all(0).any():
+                            continue
+                        # discard pixels that do not fall in the s2 raster
+                        if not is_valid_rasters_offsets(i, j, gt_ds, s2_ds):
+                            continue
+                        # Pick the closest s1 asc/desc images to form the input
+                        matching_ascending = [list(sorted(valid_ascending, key=lambda x: abs(x[1]-s2_date)))[0][0]]
+                        matching_descending = [list(sorted(valid_descending, key=lambda x: abs(x[1]-s2_date)))[0][0]]
+                        # add s2 and matching s1 images to list of available images for this location
+                        if len(matching_ascending) and len(matching_descending):
+                            images_for_pixel.append((s2_image, matching_ascending, matching_descending))
                     num_images_per_pixel[0, i, j] = len(images_for_pixel)
                     # a data point corresponds to one image coordinate, such that regions with higher number
                     # of available images are not oversampled during training. Only add if there's at least one image

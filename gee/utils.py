@@ -1,5 +1,6 @@
 import yaml
 import time
+import os 
 import rasterio
 import rasterio.warp 
 import rasterio.features
@@ -47,3 +48,21 @@ def get_project_data(
     # change order of coords
     bbox["coordinates"] = bbox["coordinates"][0][:2]
     return gt_path, gt_file, gt, gt_date, gt_file.crs, polygon["coordinates"], bbox["coordinates"]
+
+def warp(input_path, ref_path, out_path):
+    import gdal
+    # Paths
+    input_path = str(input_path)
+    ref_path = str(ref_path)
+    out_path = str(out_path)
+    # Load reference dataset
+    ref_ds = gdal.Open(ref_path)
+    # warp options
+    warp_options = gdal.WarpOptions(
+        format="GTiff",
+        dstSRS=ref_ds.GetProjectionRef(),
+        xRes=10.0, yRes=-10.0
+    )
+    # reproject
+    out_ds = gdal.Warp(out_path, input_path, options=warp_options)
+    return ref_ds, out_ds

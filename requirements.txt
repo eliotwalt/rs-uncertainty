@@ -17,3 +17,4 @@ typing_extensions>=4.5.0
 urllib3>=1.26.14
 wandb>=0.13.10
 scipy>=1.7.3
+geetools>=0.6.14

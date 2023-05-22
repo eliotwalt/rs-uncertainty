@@ -7,8 +7,8 @@ from pathlib import Path
 from datetime import datetime
 from tqdm import tqdm
 import time
-from osgeo import gdal
 from gdrive_handler import GDriveV3Wrapper
+from utils import warp
 
 def downloadGEETasks(drive, tasks, filenames, drive_folder, local_folder, verbose=False):
     paths = []
@@ -77,7 +77,7 @@ def exportImageCollectionToDrive(
     while True:
         try:
             img = ee.Image(img_list.get(n))
-            name = fn_prefix+"{}-{}".format(
+            name = fn_prefix+"{}_{}".format(
                 img.id().getInfo().split("_")[0], 
                 datetime.now().strftime("%Y%d%mT%H%M%S"))
             description = utils.matchDescription(makeName(img, namePattern, datePattern, extra).getInfo())
@@ -128,110 +128,43 @@ class GEELocalDownloader:
     def verbose_print(self, msg):
         if self.verbose: print(msg)
 
-    def merge_image_collection_by_date(self, imgCol):
-        '''
-        function that merges images together that have the same date. 
-        adapted from: https://gis.stackexchange.com/questions/372744/how-to-create-a-loop-which-creates-single-mosaic-images-for-each-day-from-a-sel
-        '''    
-        self.verbose_print(f"Creating mosaic...")
-        #Convert the image collection to a list.
-        imgList = imgCol.toList(imgCol.size())        
-        # Driver function for mapping the unique dates
-        def uniqueDriver(image):
-            return ee.Image(image).date().format("YYYY-MM-dd")        
-        uniqueDates = imgList.map(uniqueDriver).distinct()
-        # Driver function for mapping the moasiacs
-        def mosaicDriver(date):
-            date = ee.Date(date)            
-            image = (imgCol
-                .filterDate(date, date.advance(1, "day")) #or (date.advance(-1, "day"), date.advance(1, "day"))?
-                .mosaic())            
-            return image.set("system:time_start", date.millis(), 
-                            "system:date", date.format("YYYY-MM-dd"),
-                            "system:id", date.format("YYYY-MM-dd"))        
-        mosaicImgList = uniqueDates.map(mosaicDriver)        
-        return ee.ImageCollection(mosaicImgList)
+    # def merge_image_collection_by_date(self, imgCol):
+    #     '''
+    #     function that merges images together that have the same date. 
+    #     adapted from: https://gis.stackexchange.com/questions/372744/how-to-create-a-loop-which-creates-single-mosaic-images-for-each-day-from-a-sel
+    #     '''    
+    #     self.verbose_print(f"Creating mosaic...")
+    #     #Convert the image collection to a list.
+    #     imgList = imgCol.toList(imgCol.size())        
+    #     # Driver function for mapping the unique dates
+    #     def uniqueDriver(image):
+    #         return ee.Image(image).date().format("YYYY-MM-dd")        
+    #     uniqueDates = imgList.map(uniqueDriver).distinct()
+    #     # Driver function for mapping the moasiacs
+    #     def mosaicDriver(date):
+    #         date = ee.Date(date)            
+    #         image = (imgCol
+    #             .filterDate(date, date.advance(1, "day")) #or (date.advance(-1, "day"), date.advance(1, "day"))?
+    #             .mosaic())            
+    #         return image.set("system:time_start", date.millis(), 
+    #                         "system:date", date.format("YYYY-MM-dd"),
+    #                         "system:id", date.format("YYYY-MM-dd"))        
+    #     mosaicImgList = uniqueDates.map(mosaicDriver)        
+    #     return ee.ImageCollection(mosaicImgList)
 
-    def aggregate_image_collection(self, icol, agg):
-        self.verbose_print(f"Aggregating image collection")
-        if "cloudless" in agg:
-            # TODO: cloud masking
-            raise NotImplementedError()
-        agg_img = eval(f"icol.{agg}()")
-        return agg_img
-    
-    # def copy_drive(self, tasks, filenames, drivefolder, localdir):
-    #     def get_downloadable_tasks(tasks):
-    #         tasks_ids = [t.id for t in tasks]
-    #         ready = set()
-    #         tasklist = ee.data.getTaskList()
-    #         for task in tasklist:
-    #             if task.id in tasks_ids: ready.add(tasks_ids.index(task.id))
-    #         return list(ready)
-    #     def copy_and_delete(drive, drivefolder, localdir, filenames):
-    #         successes = []
-    #         for file in drive.listFile(folderName=drivefolder):
-    #             fileId, fileName = file.get("id"), file.get("name")
-    #             imageName = fileName.split(".")[0]
-    #             if names_list is not None and imageName not in names_list: continue
-    #             self.verbose_print(f"Found match on drive: fileName={fileName}, fileId={fileId}")
-    #             try:
-    #                 self.drive.downloadFile(localdir=localdir, fileId=fileId, fileName=fileName)
-    #                 try:
-    #                     self.drive.deleteFile(fileId=fileId)
-    #                     successes.append(imageName)
-    #                 except Exception as e:
-    #                     print(f"Could not delete file with id {fileId}.")
-    #                     print(e)
-    #             except Exception as e:
-    #                 print(f"Download of file with id {fileId} failed.")
-    #                 print(e)
-    #         return successes
-    #     paths = []
-    #     while len(tasks)>0:
-    #         time.sleep(5)
-    #         downloadable_ids = get_downloadable_tasks(tasks)
-    #         downloadable_filenames = [filenames[i] for i in downloadable_ids]
-    #         self.verbose_print(f'Remaining tasks: {len(tasks)}, Downloadable tasks: {len(downloadable_ids)}')
-    #         success = copy_and_delete(self.drive, drivefolder, localdir, downloadable_filenames)
-    #         tasks = [task for task in tasks if task["config"]["description"] not in success]
-    #         paths.extend(list(set([os.path.join(localdir, s+".tif") for s in success])))
-    #     return paths
+    # def aggregate_image_collection(self, icol, agg):
+    #     self.verbose_print(f"Aggregating image collection")
+    #     if "cloudless" in agg:
+    #         # TODO: cloud masking
+    #         raise NotImplementedError()
+    #     agg_img = eval(f"icol.{agg}()")
+    #     return agg_img
 
-    # def download_image(self, image, fn_prefix, drivefolder, geometry, dtype, scale):
-    #     projection = ee.Projection(self.crs)
-    #     image = self.cast(ee.Image(image), dtype)#.clip(geometry)
-    #     fn = fn_prefix+"{}-{}".format(image.id().getInfo().split("_")[0], datetime.now().strftime("%Y%d%mT%H%M%S"))# +"_withClip" # DEBUG
-    #     task = ee.batch.Export.image.toDrive(
-    #         image=image,
-    #         description=fn,
-    #         fileNamePrefix=fn,
-    ##         region=geometry,
-    #         crs=projection.getInfo()["crs"],
-    #         crs_transform=projection.getInfo()["transform"],
-    #         folder=drivefolder,
-    #         fileFormat="GeoTIFF",
-    #         scale=scale
-    #     )
-    #     task.start()
-    #     self.verbose_print(f"Submitting image {fn}, taskId={task.id}")
-    #     return vars(task)
-
-    def reproject(self, paths, gt_path):
-        def _reproject(input_path, gt_path):
-            input_path = Path(input_path)
-            output_path = Path(str(input_path).replace(input_path.stem, input_path.stem+"_reprojected"))
-            with gdal.Open(gt_path) as gt_file:
-                proj_ = gt_file.GetProjectionRef()
-                warp_opts = gdal.WarpOptions(
-                    format="GTiff",
-                    dstSRS=proj_,
-                    xRes=10.0, yRes=-10.0)
-                x_ds = gdal.Warp(output_path, input_path, options=warp_opts)
-                x_ds = None 
+    def reproject(self, paths, gt_path, out_dir): 
         for path in paths: 
             self.verbose_print(f"Reprojecting {path}")
-            _reproject(path, gt_path)
+            out_path = os.path.join(out_dir, Path(path).name)
+            warp(path, gt_path, out_path)
 
     def get_image_collection(
         self,
@@ -277,6 +210,7 @@ class GEELocalDownloader:
         gt_date: datetime,
         gt_path: str,
         reproject_to_gt_crs: bool,
+        reprojected_localdir: str,
         date_offset_amount: int, 
         date_offset_unit: str="day",
         date_offset_policy: str="both", # (before, after, both)
@@ -298,8 +232,8 @@ class GEELocalDownloader:
         self.verbose_print(f"Downloading images for project {project_id}")
 
         # args
-        fn_prefix = f'{project_id}-GEE_{collection_name.replace("/", "_")}-'
-        print(fn_prefix)
+        fn_prefix = f'{project_id}_GEE_{collection_name.replace("/", "_").replace("_","-")}_'
+        self.verbose_print(f"File prefix: {fn_prefix}")
         # Create ImageCollection
         icol, geometry = self.get_image_collection(
             bbox,
@@ -319,7 +253,6 @@ class GEELocalDownloader:
         
         # Download image collection
         else:
-            fn_prefix = f'{project_id}-GEE_{collection_name.replace("/", "_")}-'
             tasks, filenames = exportImageCollectionToDrive(
                 collection=icol,
                 region=geometry,
@@ -333,4 +266,4 @@ class GEELocalDownloader:
             paths = downloadGEETasks(self.drive, tasks, filenames, drivefolder, localdir, verbose=self.verbose)
 
         # Reproject
-        if reproject_to_gt_crs: self.reproject(paths, gt_path)
+        if reproject_to_gt_crs: self.reproject(paths, gt_path, reprojected_localdir)
