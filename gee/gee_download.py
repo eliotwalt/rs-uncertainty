@@ -119,6 +119,9 @@ class GEELocalDownloader:
         # other
         verbose: bool=False
     ):
+        # Initiailize project. If auth expired:
+        # locally: `earthengine authenticate`
+        # remotely: run `import ee; ee.Authenticate()` in a notebook (probably a better way but that works)
         ee.Initialize(project=gee_project)
         self.drive = GDriveV3Wrapper(token_file, credentials_file, gdrive_scopes, verbose)
         self.crs = crs

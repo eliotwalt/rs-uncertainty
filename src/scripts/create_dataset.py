@@ -450,7 +450,6 @@ class ProjectsPreprocessor:
                 is_in_polygon = (rasterized_polygon[i_slice, j_slice] == 1).all()
                 # Ignore pixels that span over multiple splits and lie completly in their polygon
                 if is_in_polygon and valid_mask[i,j]:
-                    dataset = self.split_map[int(split_mask[i,j])]
                     images_for_pixel: List[Tuple[np.ndarray, List[np.ndarray], List[np.ndarray]]] = []
                     # filter out s1 images which contain a nodata pixel in the patch, i.e. images which do
                     # not fully cover the patch. We noticed that some s1 images have weird stripes with
@@ -492,17 +491,17 @@ class ProjectsPreprocessor:
                                 + [self.separator]
                             )
                         # add sample stats to corresponding split
-                        locations[dataset].append((i, j))
-                        offsets[dataset].append(len(loc_to_images_map[dataset]))
-                        loc_to_images_map[dataset].extend(this_loc_to_images_map)
+                        locations["test"].append((i, j))
+                        offsets["test"].append(len(loc_to_images_map["test"]))
+                        loc_to_images_map["test"].extend(this_loc_to_images_map)
         # save stats
         stats["num_images_per_pixel"] = {
             "mean": float(num_images_per_pixel.mean()), 
             "min": float(num_images_per_pixel.min()),
             "max": float(num_images_per_pixel.max()),
         }
-        stats["num_train"] = len(locations["train"])
-        stats["num_val"] = len(locations['val'])
+        stats["num_train"] = 0
+        stats["num_val"] = 0
         stats["num_test"] = len(locations['test'])
         # save pkl
         project_data, _ = self._save_project_patches(
@@ -525,7 +524,8 @@ class ProjectsPreprocessor:
         self,
         project_id,
         stats,
-        data
+        data,
+        dataset="train"
     ):
         patch_size = self.run["patch_size"]
         s2_stats = RunningStats((12,))
