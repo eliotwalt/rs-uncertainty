@@ -1,4 +1,3 @@
-python -m pip install gdal==`gdal-config --version`
 conda install gdal --force-reinstall
 conda install rasterio 
 python -m pip install --upgrade google-api-python-client google-auth-httplib2 google-auth-oauthlib earthengine-api geetools

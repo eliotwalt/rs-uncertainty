@@ -8,7 +8,7 @@ from datetime import datetime
 from tqdm import tqdm
 import time
 from gdrive_handler import GDriveV3Wrapper
-from utils import warp
+from utils import warpRio, filterInvalidCloudProba
 
 def downloadGEETasks(drive, tasks, filenames, drive_folder, local_folder, verbose=False):
     paths = []
@@ -79,7 +79,7 @@ def exportImageCollectionToDrive(
             img = ee.Image(img_list.get(n))
             name = fn_prefix+"{}_{}".format(
                 img.id().getInfo().split("_")[0], 
-                datetime.now().strftime("%Y%d%mT%H%M%S"))
+                datetime.now().strftime("%Y%m%dT%H%M%S"))
             description = utils.matchDescription(makeName(img, namePattern, datePattern, extra).getInfo())
             # convert data type
             img = utils.convertDataType(dataType)(img)
@@ -163,43 +163,63 @@ class GEELocalDownloader:
     #     agg_img = eval(f"icol.{agg}()")
     #     return agg_img
 
-    def reproject(self, paths, gt_path, out_dir): 
+    def reproject(self, paths, ref_path, out_dir): 
         for path in paths: 
             self.verbose_print(f"Reprojecting {path}")
             out_path = os.path.join(out_dir, Path(path).name)
-            warp(path, gt_path, out_path)
+            warpRio(path, ref_path, out_path)
 
     def get_image_collection(
         self,
         bbox: list,
-        gt_date: datetime,
+        ref_date: datetime,
         date_offset_amount: int, 
-        date_offset_unit: str="day",
-        date_offset_policy: str="both", # (before, after, both)
-        collection_name: str="COPERNICUS/S2_SR_HARMONIZED",
-        s2_bands: list=['B1','B2','B3','B4','B5','B6','B7','B8','B8A', 'B9', 'B11','B12','MSK_CLDPRB'],
-        mosaic: bool=False
+        date_offset_unit: str,
+        date_offset_policy: str,
+        collection_name: str,
+        s2_bands: list,
+        use_cloud_probability: bool,
+        mosaic: bool,
     ):
         # 1. Define Polygon
         self.verbose_print(f"Creating rectangle from {bbox}...")
         aoi = ee.Geometry.Rectangle(bbox, proj=ee.Projection(self.crs))
         # 2. Define dates
-        gt_date = ee.Date(gt_date)
+        ref_date = ee.Date(ref_date)
         if date_offset_policy == "before":
-            start_date = gt_date.advance(-date_offset_amount, date_offset_unit)
-            end_date = gt_date
+            start_date = ref_date.advance(-date_offset_amount, date_offset_unit)
+            end_date = ref_date
         elif date_offset_policy == "after":
-            start_date = gt_date
-            end_date = gt_date.advance(date_offset_amount, date_offset_unit)
+            start_date = ref_date
+            end_date = ref_date.advance(date_offset_amount, date_offset_unit)
         else:
-            start_date = gt_date.advance(-date_offset_amount, date_offset_unit)
-            end_date = gt_date.advance(date_offset_amount, date_offset_unit)
+            start_date = ref_date.advance(-date_offset_amount, date_offset_unit)
+            end_date = ref_date.advance(date_offset_amount, date_offset_unit)
         self.verbose_print(f"Date filter: {start_date.format('dd.MM.yyyy').getInfo()} - {end_date.format('dd-MM-yyyy').getInfo()}")
         # 3. Get image collection
         icol = (ee.ImageCollection(collection_name)
              .filterBounds(aoi)
              .filterDate(start_date, end_date)
              .select(s2_bands))
+        # 4. Get cloud probability collection
+        if use_cloud_probability:
+            self.verbose_print(f"Adding S2_CLOUD_PROBABILITY...")
+            # load image collection
+            clouds_icol = (ee.ImageCollection("COPERNICUS/S2_CLOUD_PROBABILITY")
+             .filterBounds(aoi)
+             .filterDate(start_date, end_date)
+             .select(["probability"]))
+            # configure join
+            joinFilter = ee.Filter.equals(**{
+                "leftField": "system:index",
+                "rightField": "system:index"
+            })
+            innerJoin = ee.Join.inner("primary", "secondary")
+            # apply join
+            icol = innerJoin.apply(icol, clouds_icol, joinFilter).map(
+                lambda feature: ee.Image.cat(feature.get('primary'), feature.get('secondary'))
+            )
+        # 5. mosaic if needed
         if mosaic:
             icol = self.merge_image_collection_by_date(icol)
         self.verbose_print(f"Found {icol.size().getInfo()} images")
@@ -210,18 +230,18 @@ class GEELocalDownloader:
         localdir: str,
         project_id: str,
         bbox: list,
-        gt_date: datetime,
-        gt_path: str,
-        reproject_to_gt_crs: bool,
+        ref_date: datetime,
+        ref_path: str,
+        reproject_to_ref_crs: bool,
         reprojected_localdir: str,
         date_offset_amount: int, 
         date_offset_unit: str="day",
         date_offset_policy: str="both", # (before, after, both)
         collection_name: str="COPERNICUS/S2_SR_HARMONIZED",
-        s2_bands: list=['B1','B2','B3','B4','B5','B6','B7','B8','B8A', 'B9', 'B11','B12','MSK_CLDPRB'],
+        s2_bands: list=['B1','B2','B3','B4','B5','B6','B7','B8','B8A', 'B9', 'B11','B12'],#,'MSK_CLDPRB'],
         drivefolder: str="geeExports",
-        batch: bool=False, # if false, sequential dl o/w parallel
         agg: str=None, # if None, raw images, o/w compute agg
+        use_cloud_probability: bool=False, # if true, joins cloud_probability band from COPERNICUS/S2_CLOUD_PROBABILITY
         mosaic: bool=False, # if True mosaic same dates
         dtype: str="uint16",
         scale: int=10,
@@ -240,33 +260,40 @@ class GEELocalDownloader:
         # Create ImageCollection
         icol, geometry = self.get_image_collection(
             bbox,
-            gt_date,
+            ref_date,
             date_offset_amount,
             date_offset_unit,
             date_offset_policy,
             collection_name,
             s2_bands,
+            use_cloud_probability,
             mosaic
         )
-        # Apply aggregation
-        if agg is not None:
-            img = self.aggregate_image_collection(icol, agg)
-            task = self.download_image(img, fn_prefix, drivefolder, geometry, dtype, scale)
-            paths = self.copy_drive([task], drivefolder, localdir)
-        
-        # Download image collection
+        if icol.size().getInfo()==0:
+            self.verbose_print(f"Ignoring empty image collection.")
         else:
-            tasks, filenames = exportImageCollectionToDrive(
-                collection=icol,
-                region=geometry,
-                folder=drivefolder,
-                scale=scale,
-                fn_prefix=fn_prefix,
-                datatype=dtype,
-                crs=self.crs,
-                verbose=self.verbose
-            )
-            paths = downloadGEETasks(self.drive, tasks, filenames, drivefolder, localdir, verbose=self.verbose)
-
-        # Reproject
-        if reproject_to_gt_crs: self.reproject(paths, gt_path, reprojected_localdir)
+            # Apply aggregation
+            if agg is not None:
+                img = self.aggregate_image_collection(icol, agg)
+                task = self.download_image(img, fn_prefix, drivefolder, geometry, dtype, scale)
+                paths = self.copy_drive([task], drivefolder, localdir)
+            
+            # Download image collection
+            else:
+                tasks, filenames = exportImageCollectionToDrive(
+                    collection=icol,
+                    region=geometry,
+                    folder=drivefolder,
+                    scale=scale,
+                    fn_prefix=fn_prefix,
+                    datatype=dtype,
+                    crs=self.crs,
+                    verbose=self.verbose
+                )
+                paths = downloadGEETasks(self.drive, tasks, filenames, drivefolder, localdir, verbose=self.verbose)
+                # Remove images that have all zero cloud mask
+                n = len(paths)
+                paths = filterInvalidCloudProba(paths, s2_bands)
+                self.verbose_print(f"Filtered {n-len(paths)} images with invalid cloud probabilities")
+            # Reproject
+            if reproject_to_ref_crs: self.reproject(paths, ref_path, reprojected_localdir)

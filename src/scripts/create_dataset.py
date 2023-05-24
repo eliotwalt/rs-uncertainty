@@ -464,9 +464,6 @@ class ProjectsPreprocessor:
                         # defined as having zeros across all channels.
                         if (s2_image[:, i_slice, j_slice] == 0.).all(0).any():
                             continue
-                        # discard pixels that do not fall in the s2 raster
-                        if not is_valid_rasters_offsets(i, j, gt_ds, s2_ds):
-                            continue
                         # Pick the closest s1 asc/desc images to form the input
                         matching_ascending = [list(sorted(valid_ascending, key=lambda x: abs(x[1]-s2_date)))[0][0]]
                         matching_descending = [list(sorted(valid_descending, key=lambda x: abs(x[1]-s2_date)))[0][0]]
