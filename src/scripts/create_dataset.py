@@ -13,7 +13,6 @@ from blowtorch import Run
 from tqdm import trange, tqdm
 import numpy as np
 import fiona
-import gdal
 import os
 import rasterio.warp
 import rasterio.features

@@ -11,11 +11,12 @@ sns.set()
 sns.set_style("whitegrid")
 
 class ExperimentVisualizer():
-    def __init__(self, rcus, exp_var_name, exp_vars, variable_names):
+    def __init__(self, rcus, exp_var_name, exp_vars, variable_names, fig_ncols=2):
         self.exp_var_name = exp_var_name 
         self.exp_vars = exp_vars
         self.rcus = rcus
         self.variable_names = variable_names
+        self.fig_ncols = fig_ncols
         self.df = self._make_df()
 
     def _make_df(self):
@@ -24,10 +25,10 @@ class ExperimentVisualizer():
         return pd.concat([r.results for r in self.rcus])
 
     @classmethod
-    def from_paths(cls, paths, exp_var_name, exp_vars, variable_names):
+    def from_paths(cls, paths, exp_var_name, exp_vars, variable_names, *args, **kwargs):
         assert isinstance(paths, list)
         rcus = [StratifiedRCU.from_json(os.path.join(p, "rcu.json")) for p in paths]
-        return cls(rcus, exp_var_name, exp_vars, variable_names)
+        return cls(rcus, exp_var_name, exp_vars, variable_names, *args, **kwargs)
     
     @classmethod
     def from_wandb(cls, *args, **kwargs):
@@ -77,7 +78,7 @@ class ExperimentVisualizer():
 
     def metric_plot(self, metric, kind):
         num_variables = len(self.variable_names)
-        ncols = num_variables//2
+        ncols = num_variables//self.fig_ncols
         nrows = num_variables-ncols
         fig, axs = plt.subplots(nrows=nrows, ncols=ncols, figsize=(12, 10))
         axs = axs.flatten()
@@ -118,7 +119,7 @@ class ExperimentVisualizer():
     
     def calibration_plot(self, metric, k=100, log_bins=False):
         num_variables = len(self.variable_names)
-        ncols = num_variables//2
+        ncols = num_variables//self.fig_ncols
         nrows = num_variables-ncols
         fig, axs = plt.subplots(nrows=nrows, ncols=ncols, figsize=(12, 12))
         axs = axs.flatten()

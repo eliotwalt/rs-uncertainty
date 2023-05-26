@@ -7,7 +7,6 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 from typing import *
-from osgeo import gdal
 sns.set()
 sns.set_style("whitegrid")
 
