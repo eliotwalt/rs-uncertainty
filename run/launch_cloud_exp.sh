@@ -26,9 +26,9 @@ mapfile -t configTriplets < <(python ${root}/src/scripts/configure_cloud_experim
 # submit pipeline job
 for (( i=0; i<${#configTriplets[@]}; i++ ));
 do
+    read -a configTriplet <<< "${configTriplets[$i]}"
     if [[ $MACHINE == "--euler" ]]; then 
         echo "Submitting pipeline job for: ${configTriplets[$i]}"
-        readarray -td " " configTriplet <<< "${configTriplets[$i]}"
         # get log files
         log_name=$(echo $(basename $CONFIG_FILE) | cut -d "." -f 1)
         # create
@@ -43,7 +43,6 @@ do
         job_ids+=(${retvalue[-1]})
     else
         set -e 
-        readarray -td " " configTriplet <<< "${configTriplets[$i]}"
         echo "***** creating dataset *****"
         python ${root}/src/scripts/create_dataset.py --preprocess --cfg ${configTriplet[0]}
         echo "***** predicting testset *****"
