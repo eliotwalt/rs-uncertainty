@@ -28,16 +28,15 @@ for (( i=0; i<${#configTriplets[@]}; i++ ));
 do
     read -a configTriplet <<< "${configTriplets[$i]}"
     if [[ $MACHINE == "--euler" ]]; then 
-        echo "Submitting pipeline job for: ${configTriplets[$i]}"
+        echo "Submitting pipeline job for: ${configTriplet}"
         # get log files
-        log_name=$(echo $(basename $CONFIG_FILE) | cut -d "." -f 1)
+        log_name=$(echo $(basename ${configTriplet[0]}) | cut -d "." -f 1)
         # create
         log_f=/cluster/work/igp_psr/elwalt/logs/pipeline/$log_name.log
         mkdir -p $(dirname $log_f)
         touch log_f
         # make options
         pipelineOptions="${options} --output=${log_f} --error=${log_f}"
-        echo "Submitting job array ..."
         retvalue=($(sbatch $options /cluster/work/igp_psr/elwalt/pdm/rs-uncertainty/run/slurm/pipeline.sh ${configTriplets[$i]}))
         echo "${retvalue[@]}"
         job_ids+=(${retvalue[-1]})
