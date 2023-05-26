@@ -1,0 +1,20 @@
+# tags
+tags: ['cloud_exp'] # keep experiment kind as first tag!
+# Variables
+data_bands: [1, 2, 3, 4, 5]
+variable_names: ['P95', 'MeanH', 'Dens', 'Gini', 'Cover']
+# Projects
+projects_east: ['346', '9', '341', '354', '415', '418', '416', '429', '439', '560', '472', '521', '498',
+        '522', '564', '764', '781', '825', '796', '805', '827', '891', '835', '920', '959', '1023', '998',
+        '527', '477', '542', '471']
+projects_west: ['528', '537', '792', '988', '769']
+projects_north: ['819', '909', '896']
+# paths
+pkl_dir: 'data/cloud_exp/${now}/${imageId}'
+prediction_dir: 'results/cloud_exp/${now}/${imageId}'
+gt_dir: 'assets/data/preprocessed'
+# metrics config
+num_bins: 1500
+normalize_mean: false
+normalize_variance: false
+upsampling_coeffs: [1, 5, 10, 25]

@@ -13,6 +13,7 @@ import rasterio.warp
 import rasterio.features
 from torchvision.transforms import Compose, Normalize
 from blowtorch import Run
+from tqdm import tqdm
 
 root = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, root)
@@ -39,7 +40,10 @@ args = parse_args()
 run = Run(config_files=[args.cfg])
 run.seed_all(12345)
 
-save_dir = Path(run["save_dir"]) / (datetime.now().strftime('%Y-%m-%d_%H-%M-%S') + (f'_{run["name"]}' if run['name'] else ''))
+if "add_date_to_save_dir" in run.get_raw_config().keys() and run["add_date_to_save_dir"]:
+    save_dir = Path(run["save_dir"]) / (datetime.now().strftime('%Y-%m-%d_%H-%M-%S') + (f'_{run["name"]}' if run['name'] else ''))
+else:
+    save_dir = Path(run["save_dir"]) / (f'_{run["name"]}' if run['name'] else '')
 save_dir.mkdir(parents=True)
 
 assert run['patch_size'] % 2 == 1, 'Patch size should be odd.'
@@ -63,6 +67,10 @@ s1_mean = np.array(stats['s1_stats']['mean'])[s1_channels].tolist()
 s1_std = np.array(stats['s1_stats']['std'])[s1_channels].tolist()
 s2_transform = Compose([ToTensor(), SelectChannels(s2_channels), Normalize(s2_mean, s2_std)])
 s1_transform = Compose([ToTensor(), SelectChannels(s1_channels), Normalize(s1_mean, s1_std)])
+print(f"s2 mean: ", [float(f"{x:.2f}") for x in s2_mean])
+print(f"s2 std: ", [float(f"{x:.2f}") for x in s2_std])
+print(f"s1 mean: ", [float(f"{x:.2f}") for x in s1_mean])
+print(f"s1 std: ", [float(f"{x:.2f}") for x in s1_std])
 
 print('Initializing models...')
 num_orbit_directions = (2 if train_config['data']['both_orbit_directions'] else 1)
@@ -85,15 +93,21 @@ torch.set_grad_enabled(False)
 num_predicted_pixels = 0
 num_nans_in_polygon = 0
 
+gt_projects = set([d.stem for d in Path(run["gt_dir"]).glob("*.tif")])
+s2_projects = set([d.name for d in os.scandir(run["s2_reprojected_dir"])])
+projects = list(s2_projects.intersection(gt_projects).intersection(set(run["projects"])))
 for gt_file_path in Path(run['gt_dir']).glob('*.tif'):
-    if gt_file_path.stem not in run['projects']:
+    if gt_file_path.stem not in projects:
         continue
 
     gt_file = rasterio.open(gt_file_path)
     gt_mask = gt_file.read_masks(1).astype(bool)
 
-    with rasterio.open(Path(run['split_mask_dir']) / gt_file_path.name) as split_file:
-        split_mask = split_file.read(1).astype('float16')
+    if run['split_mask_dir'] is None:
+        split_mask = np.full(gt_file.shape, 2, dtype="float16")
+    else:
+        with rasterio.open(Path(run['split_mask_dir']) / gt_file_path.name) as split_file:
+            split_mask = split_file.read(1).astype('float16')
 
     # reproject project polygon to labels crs and rasterize
     polygon, crs = None, None
@@ -159,7 +173,7 @@ for gt_file_path in Path(run['gt_dir']).glob('*.tif'):
 
         print(f'Processing stripe [{start}, {end})')
 
-        for i in chain(range(start + patch_half, end - patch_half, step_size), [end - patch_half - 1]):
+        for i in tqdm(list(chain(range(start + patch_half, end - patch_half, step_size), [end - patch_half - 1]))):
             for j in chain(range(patch_half, gt_file.shape[1] - patch_half, step_size),
                            [gt_file.shape[1] - patch_half - 1]):
                 i_slice = slice(i - patch_half, i + patch_half + 1)
@@ -203,17 +217,26 @@ for gt_file_path in Path(run['gt_dir']).glob('*.tif'):
 
                     # only add patch with less than 10% cloudy pixels, where a cloudy pixel is defined as
                     # having cloud probability > 10%.
-                    if (s2_image[-1, i_slice, j_slice] > run['cloud_prob_threshold']).sum() \
-                            / run['patch_size']**2 > run['cloudy_pixels_threshold']:
-                        continue
+                    if run["sampling_strategy"]=="valid_center":
+                        if (s2_image[-1, i_slice, j_slice] > run['cloud_prob_threshold']).sum() \
+                                / run['patch_size']**2 > run['cloudy_pixels_threshold']:
+                            continue
+                    elif run["sampling_strategy"]=="s2_offset_valid_center":
+                        pass
+                    else:
+                        raise ValueError(f'No cloud threshold behavior specified for sampling strategy: {run["sampling_strategy"]}')
 
                     # determine matching s1 image date. All S1 images within 15 days of the S2 image will be
                     # queried and the first one is selected.
                     try:
-                        matching_ascending = [img for img, date in valid_ascending if
-                                              abs((s2_date - date).days) <= 15][0]
-                        matching_descending = [img for img, date in valid_descending if
-                                               abs((s2_date - date).days) <= 15][0]
+                        if "closest_s1" in run.get_raw_config().keys() and run["closest_s1"]:
+                            matching_ascending = [list(sorted(valid_ascending, key=lambda x: abs(x[1]-s2_date)))[0][0]][0]
+                            matching_descending = [list(sorted(valid_descending, key=lambda x: abs(x[1]-s2_date)))[0][0]][0]
+                        else:
+                            matching_ascending = [img for img, date in valid_ascending if
+                                                abs((s2_date - date).days) <= 15][0]
+                            matching_descending = [img for img, date in valid_descending if
+                                                abs((s2_date - date).days) <= 15][0]
                     except IndexError:
                         # no matching ascending and descending image found for this s2 image and patch
                         continue
@@ -309,6 +332,7 @@ for gt_file_path in Path(run['gt_dir']).glob('*.tif'):
 
     gt_file.close()
 
+print(f"writing prediction config and statistics...")
 # save config file along with the pickle objects
 with open(save_dir / 'prediction_config.yaml', 'w') as fh:
     yaml.dump(run.get_raw_config(), fh)

@@ -23,7 +23,7 @@ from time import time
 import sys, os 
 root = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, root)
-from utils import split_list, RunningStats, CombinedStats, is_valid_rasters_offsets
+from utils import split_list, RunningStats, CombinedStats
 
 SEPARATOR = 65535
 
@@ -84,9 +84,13 @@ class ProjectsPreprocessor:
         # collect arguments
         args_dicts = []
         projects = self.run["projects"].copy()
+        # only loop on projects that are actually here
+        gt_projects = set([d.stem for d in Path(self.run["gt_dir"]).glob("*.tif")])
+        s2_projects = set([d.name for d in os.scandir(self.run["s2_reprojected_dir"])])
+        projects = list(s2_projects.intersection(gt_projects).intersection(set(projects)))
         i, N = 0, len(projects)
         for gt_file_path in Path(self.run["gt_dir"]).glob("*.tif"):
-            if gt_file_path.stem in projects:
+            if gt_file_path.stem in projects and os.path.exists(pjoin(self.run["s2_reprojected_dir"], gt_file_path.stem)):
                 i += 1
                 projects.remove(gt_file_path.stem)
                 #project_projects_stats = self._create_project_dataset(gt_file_path)
@@ -106,8 +110,8 @@ class ProjectsPreprocessor:
         # save stats and config
         start = time()
         if self.verbose: print("Writing stats")
-        # with pjoin(self.save_dir, "stats.json").open("w") as fh:
-        #     json.dump(self.projects_stats, fh, indent="\t")
+        if self.run["stats_path"] is not None:
+            self._copy_global_stats(self.projects_stats, self.run["stats_path"])
         with pjoin(self.save_dir, "stats.yaml").open("w") as fh:
             yaml.dump(self.projects_stats, fh)
         if self.verbose: print("Done writing stats in {}".format(timedelta(seconds=time()-start)))
@@ -116,6 +120,20 @@ class ProjectsPreprocessor:
         with pjoin(self.save_dir, "data_config.yaml").open("w") as fh:
             yaml.dump(self.run.get_raw_config(), fh)
         if self.verbose: print("Done writing config in {}".format(timedelta(seconds=time()-start)))
+
+    def _copy_global_stats(
+        self,
+        stats,
+        stats_path
+    ):
+        with open(stats_path) as f:
+            external_stats = yaml.safe_load(f)
+        stats.update({
+            "s2_stats": external_stats["s2_stats"],
+            "s1_stats": external_stats["s1_stats"],
+            "labels_stats": external_stats["labels_stats"],
+        })
+        return stats
 
     def _create_project_dataset(self, args_dict: dict) -> None:
         gt_file_path, i, N = args_dict["gt_file_path"], args_dict["i"], args_dict["N"]
@@ -133,7 +151,8 @@ class ProjectsPreprocessor:
         gt_file, valid_mask, labels = self._read_gt_file(gt_file_path)
         project_projects_stats["shape"] = list(valid_mask.shape)
         # read split_mask
-        split_mask = self._read_split_mask(pjoin(self.run["split_mask_dir"], project_id+".tif"))
+        smpath = None if self.run["split_mask_dir"] is None else pjoin(self.run["split_mask_dir"], project_id+".tif")
+        split_mask = self._read_split_mask(smpath, gt_file.shape)
         # get rasterized polygon
         rasterized_polygon, gt_date = self._get_polygon_raster(
             self.run["project_shapefiles"],
@@ -142,7 +161,7 @@ class ProjectsPreprocessor:
         project_projects_stats["gt_date"] = gt_date
         # read images
         images, image_ids, s2_images, s1_images_ascending, s1_images_descending = self._read_project_images(project_id)
-        project_projects_stats["s2_dates"] = [d for _, d, _ in s2_images]
+        project_projects_stats["s2_dates"] = [d for _, d in s2_images]
         project_projects_stats["s1_ascending_dates"] = [d for _, d in s1_images_ascending]
         project_projects_stats["s1_descending_dates"] = [d for _, d in s1_images_descending]
         project_projects_stats["num_s2_images"] = len(s2_images)
@@ -201,7 +220,7 @@ class ProjectsPreprocessor:
         labels[:, valid_mask == 0] = np.nan
         return gt_file, valid_mask, labels
     
-    def _read_split_mask(self, path):
+    def _read_split_mask(self, path, shape):
         """ 
         DatasetCreateor._read_split_mask method: read and return split mask
         
@@ -211,7 +230,11 @@ class ProjectsPreprocessor:
         Returns:
         - split_mask (np.ndarray[H, W]): Cross-validation split mask, `0->train`, `1->val`, `2->test`.
         """
-        with rasterio.open(path) as f: split_mask = f.read(1).astype('float16')
+        if path is None:
+            split_mask = np.full(shape, 2, dtype="float16")
+        else:
+            with rasterio.open(path) as f: split_mask = f.read(1).astype('float16')
+        assert split_mask.shape == shape, f"Invalid shape mask shape"
         return split_mask
     
     def _get_polygon_raster(self, files: List[Union[str, Path]], project_id: str, gt_file):
@@ -268,7 +291,7 @@ class ProjectsPreprocessor:
         # read s2
         for img_path in pjoin(self.run['s2_reprojected_dir'], project_id).glob('*.tif'):
             with rasterio.open(img_path) as fh:
-                s2_images.append((fh.read(fh.indexes), parse_date(img_path.stem.split('_')[3].split('T')[0]), gdal.Open(str(img_path))))
+                s2_images.append((fh.read(fh.indexes), parse_date(img_path.stem.split('_')[3].split('T')[0])))
         # read s1
         for img_path in pjoin(self.run['s1_reprojected_dir'], project_id).glob('*.tif'):
             with rasterio.open(img_path) as fh:
@@ -279,7 +302,7 @@ class ProjectsPreprocessor:
                 else:
                     raise ValueError(f'Could not extract orbit direction from filename: {img_path.name}')
                 s1_list.append((fh.read(fh.indexes), parse_date(img_path.stem.split('_')[5].split('T')[0])))
-        images = [img for img, _, _ in s2_images]+[img for img, _ in chain(s1_images_ascending, s1_images_descending)]
+        images = [img for img, _ in s2_images]+[img for img, _ in chain(s1_images_ascending, s1_images_descending)]
         image_ids = [id(img) for img in images]
         return images, image_ids, s2_images, s1_images_ascending, s1_images_descending
     
@@ -337,7 +360,7 @@ class ProjectsPreprocessor:
                     valid_descending = [img for img in s1_images_descending if (img[0][:, i_slice, j_slice] > 8.).all()]
                     if len(valid_ascending) == 0 or len(valid_descending) == 0:
                         continue
-                    for s2_image, s2_date, s2_file in s2_images:
+                    for s2_image, s2_date in s2_images:
                         # do not add TEST images if the difference between s2_date and gt_date is greater than 
                         # the threshold `testset_max_days_delta` (if specified)
                         if dataset == "test" and self.run["testset_max_days_delta"] is not None and abs((gt_date-s2_date).days > self.run["testset_max_days_delta"]):
@@ -439,7 +462,6 @@ class ProjectsPreprocessor:
         shape = gt_file.shape
         num_images_per_pixel = np.zeros((1, *shape), dtype=np.uint8)
         patch_half = self.run['patch_size'] // 2
-        gt_ds = gdal.Open(str(gt_file.name))
         for i in self.prange(patch_half, gt_file.shape[0] - patch_half):
         # for i in range(patch_half, gt_file.shape[0] - patch_half):
             # if i==10: break # DEBUG
@@ -459,7 +481,7 @@ class ProjectsPreprocessor:
                     valid_descending = [img for img in s1_images_descending if (img[0][:, i_slice, j_slice] > 8.).all()]
                     if len(valid_ascending) == 0 or len(valid_descending) == 0:
                         continue
-                    for s2_image, s2_date, s2_ds in s2_images:
+                    for s2_image, s2_date in s2_images:
                         # only add patch if there is no nodata pixel contained, where a nodata pixel is
                         # defined as having zeros across all channels.
                         if (s2_image[:, i_slice, j_slice] == 0.).all(0).any():
@@ -522,7 +544,6 @@ class ProjectsPreprocessor:
         project_id,
         stats,
         data,
-        dataset="train"
     ):
         patch_size = self.run["patch_size"]
         s2_stats = RunningStats((12,))
