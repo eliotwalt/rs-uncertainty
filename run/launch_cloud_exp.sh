@@ -7,6 +7,12 @@ else
     echo "invalid machine"; exit 1
 fi
 if [[ $MACHINE == "--euler" ]]; then
+    echo "Setting up env"
+    PYVERSION=3.7.4
+    GDALVESION=3.4.3
+    module load python/$PYVERSION gdal/$GDALVERSION
+    pip install gdal==`gdal-config --version` --user # do not put it in requirements, the version must match local install!
+    pip install -r requirements.txt --user
     options="-n 1 --mem-per-cpu=64000 --time=4:00:00 --job-name=predict --gpus=1 --gres=gpumem:12g"
     root="/cluster/work/igp_psr/elwalt/pdm/rs-uncertainty"
 else 
@@ -14,6 +20,7 @@ else
 fi
 
 # get config
+echo "Running autoconfig..."
 mapfile -t configTriplets < <(python ${root}/src/scripts/configure_cloud_experiment.py --create ${root}/config/create_dataset/cloud_exp_template.yaml --predict ${root}/config/predict_testset/cloud_exp_template.yaml --eval ${root}/config/predict_testset/cloud_exp_template.yaml)
 
 # submit pipeline job
