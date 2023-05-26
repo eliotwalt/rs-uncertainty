@@ -28,7 +28,7 @@ for (( i=0; i<${#configTriplets[@]}; i++ ));
 do
     read -a configTriplet <<< "${configTriplets[$i]}"
     if [[ $MACHINE == "--euler" ]]; then 
-        echo "Submitting pipeline job for: ${configTriplet}"
+        echo "Submitting pipeline job for: ${configTriplet[@]}"
         # get log files
         log_name=$(echo $(basename ${configTriplet[0]}) | cut -d "." -f 1)
         # create
