@@ -55,8 +55,8 @@ class ExperimentVisualizer():
         if not isinstance(hi_bound, list): hi_bound = [hi_bound for _ in range(len(self.variable_names))]
         num_variables = len(self.variable_names)
         ncols = num_variables//2
-        nrows = num_variables-ncols
-        fig, axs = plt.subplots(nrows=nrows, ncols=ncols, figsize=(12, 10))
+        nrows = num_variables-ncols+1 if num_variables-ncols!=0 else 1
+        fig, axs = plt.subplots(nrows=nrows, ncols=ncols, figsize=(12, 18))
         axs = axs.flatten()
         for i, var in enumerate(self.variable_names):
             self.variable_histogram_plot(var, axs[i], hi_bound[i], log)
@@ -79,8 +79,8 @@ class ExperimentVisualizer():
     def metric_plot(self, metric, kind):
         num_variables = len(self.variable_names)
         ncols = num_variables//self.fig_ncols
-        nrows = num_variables-ncols
-        fig, axs = plt.subplots(nrows=nrows, ncols=ncols, figsize=(12, 10))
+        nrows = num_variables-ncols+1 if num_variables-ncols!=0 else 1
+        fig, axs = plt.subplots(nrows=nrows, ncols=ncols, figsize=(12, 18))
         axs = axs.flatten()
         for i, var in enumerate(self.variable_names):
             self.variable_metric_plot(metric, var, kind, axs[i])
@@ -113,15 +113,14 @@ class ExperimentVisualizer():
         )
         ax.plot(*id_line, color="black", linestyle="dotted")
         sns.lineplot(data=ccdf, x=cols[0], y=cols[1], hue=cols[2], ax=ax)
-        print(xc.shape)
-        ax.vlines(x=xc, ymin=lo, ymax=hi/5, color="black", ls="dashed")
+        # ax.vlines(x=xc, ymin=lo, ymax=hi/5, color="black", ls="dashed")
         return ax
     
     def calibration_plot(self, metric, k=100, log_bins=False):
         num_variables = len(self.variable_names)
         ncols = num_variables//self.fig_ncols
-        nrows = num_variables-ncols
-        fig, axs = plt.subplots(nrows=nrows, ncols=ncols, figsize=(12, 12))
+        nrows = num_variables-ncols+1 if num_variables-ncols!=0 else 1
+        fig, axs = plt.subplots(nrows=nrows, ncols=ncols, figsize=(12, 18))
         axs = axs.flatten()
         for i, var in enumerate(self.variable_names):
             self.variable_calibration_plot(metric, var, k=k, log_bins=log_bins, ax=axs[i])
