@@ -2,6 +2,7 @@ import wandb
 import pandas as pd
 import matplotlib.pyplot as plt 
 import tempfile
+import math
 import json
 import os
 import seaborn as sns
@@ -34,7 +35,7 @@ class ExperimentVisualizer():
     def from_wandb(cls, *args, **kwargs):
         raise NotImplementedError()
     
-    def variable_histogram_plot(self, variable, ax=None, hi_bound=np.inf, log=True):
+    def variable_histogram_plot(self, variable, ax=None, hi_bound=np.inf, log=True, palette=None, show_legend=True):
         if ax is None:
             fig, ax = plt.subplots()
         var_idx = self.variable_names.index(variable)
@@ -47,21 +48,29 @@ class ExperimentVisualizer():
             hdf = hdf[hdf.variance<hi_bound]
         hhdf = hdf.groupby(["variance", self.exp_var_name]).sum().reset_index()
         hhdf = hhdf.sort_values(by=[self.exp_var_name])
-        g = sns.lineplot(data=hhdf, x="variance", hue=self.exp_var_name, y="probability", ax=ax)
-        if log: _ = g.set(xscale='log', xlabel="log variance")
+        if palette is not None: kwargs = {"palette": palette}
+        else: kwargs = {}
+        g = sns.lineplot(data=hhdf, x="variance", hue=self.exp_var_name, y="probability", ax=ax, alpha=0.5, **kwargs)
+        if log: 
+            ax.set_xscale("log")
+            ax.set_xlabel("log variance")
+        if not show_legend:
+            ax.get_legend().remove()
+        else:
+            ax.legend(loc="upper right")
         return ax
     
-    def histogram_plot(self, hi_bound=np.inf, log=True):
-        if not isinstance(hi_bound, list): hi_bound = [hi_bound for _ in range(len(self.variable_names))]
+    def histogram_plot(self, hi_bounds=np.inf, log=True, figsize=(12, 18), **kwargs):
+        if not isinstance(hi_bounds, list): hi_bounds = [hi_bounds for _ in range(len(self.variable_names))]
         num_variables = len(self.variable_names)
-        ncols = num_variables//2
-        nrows = num_variables-ncols+1 if num_variables-ncols!=0 else 1
-        fig, axs = plt.subplots(nrows=nrows, ncols=ncols, figsize=(12, 18))
+        ncols = self.fig_ncols
+        nrows = 1 if self.fig_ncols>=num_variables else math.ceil(num_variables/self.fig_ncols)
+        fig, axs = plt.subplots(nrows=nrows, ncols=ncols, figsize=figsize)
         axs = axs.flatten()
         for i, var in enumerate(self.variable_names):
-            self.variable_histogram_plot(var, axs[i], hi_bound[i], log)
+            self.variable_histogram_plot(var, axs[i], hi_bounds[i], log, **kwargs)
             axs[i].set_title(var)
-            axs[i].legend(loc="upper right")
+        if num_variables%self.fig_ncols!=0: fig.delaxes(axs.flatten()[-1])    
         return axs
 
     def variable_metric_plot(self, metric, variable, kind, ax=None):
@@ -76,19 +85,21 @@ class ExperimentVisualizer():
         sns.lineplot(data=gvmdf, x=self.exp_var_name, y="x", ax=ax)
         return ax
 
-    def metric_plot(self, metric, kind):
+    def metric_plot(self, metric, kind, figsize=(12, 18)):
         num_variables = len(self.variable_names)
-        ncols = num_variables//self.fig_ncols
-        nrows = num_variables-ncols+1 if num_variables-ncols!=0 else 1
-        fig, axs = plt.subplots(nrows=nrows, ncols=ncols, figsize=(12, 18))
+        ncols = self.fig_ncols
+        nrows = 1 if self.fig_ncols>=num_variables else math.ceil(num_variables/self.fig_ncols)
+        print(ncols, nrows)
+        fig, axs = plt.subplots(nrows=nrows, ncols=ncols, figsize=figsize)
         axs = axs.flatten()
         for i, var in enumerate(self.variable_names):
             self.variable_metric_plot(metric, var, kind, axs[i])
             axs[i].set_title(var)
         fig.suptitle(metric)
+        if num_variables%self.fig_ncols!=0: fig.delaxes(axs.flatten()[-1])
         return axs
     
-    def variable_calibration_plot(self, metric, variable, k=100, log_bins=False, ax=None):
+    def variable_calibration_plot(self, metric, variable, k=100, log_bins=False, ax=None, hi_bound=np.inf, palette=None, show_legend=True):
         bin_type = "log" if log_bins else "linear"
         if ax is None:
             fig, ax = plt.subplots()
@@ -105,30 +116,42 @@ class ExperimentVisualizer():
             ct = np.full(xc.shape, str(self.exp_vars[i]))
             ccdf = pd.concat([ccdf, pd.DataFrame({cols[0]:xc, cols[1]:yc[var_idx], cols[-1]:ct[var_idx]})])
         ccdf = ccdf.dropna()
+        ccdf = ccdf.sort_values(by=[self.exp_var_name])
         lo = min(ccdf[cols[0]].min(), ccdf[cols[1]].min())
-        hi = max(ccdf[cols[0]].max(), ccdf[cols[1]].max())
+        hi = min(hi_bound, max(ccdf[cols[0]].max(), ccdf[cols[1]].max()))
         id_line = (
             np.linspace(lo, hi, 2), 
             np.linspace(lo, hi, 2)
         )
+        ccdf = ccdf[ccdf[cols[0]]<hi_bound]
         ax.plot(*id_line, color="black", linestyle="dotted")
-        sns.lineplot(data=ccdf, x=cols[0], y=cols[1], hue=cols[2], ax=ax)
+        if palette is not None: kwargs = {"palette": palette}
+        else: kwargs = {}
+        sns.lineplot(data=ccdf, x=cols[0], y=cols[1], hue=self.exp_var_name, ax=ax, alpha=0.5, **kwargs)
+        if not show_legend:
+            ax.get_legend().remove()
+        else:
+            ax.legend(loc="upper right")
         # ax.vlines(x=xc, ymin=lo, ymax=hi/5, color="black", ls="dashed")
         return ax
     
-    def calibration_plot(self, metric, k=100, log_bins=False):
+    def calibration_plot(self, metric, k=100, log_bins=False, hi_bounds=np.inf, figsize=(12, 18), fig_ncols=None, **kwargs):
+        if not isinstance(hi_bounds, list): hi_bounds = [hi_bounds for _ in range(len(self.variable_names))]
         num_variables = len(self.variable_names)
-        ncols = num_variables//self.fig_ncols
-        nrows = num_variables-ncols+1 if num_variables-ncols!=0 else 1
-        fig, axs = plt.subplots(nrows=nrows, ncols=ncols, figsize=(12, 18))
+        if fig_ncols is not None:
+            previous_ncols = self.fig_ncols
+            self.fig_ncols = fig_ncols
+        ncols = self.fig_ncols
+        nrows = 1 if self.fig_ncols>=num_variables else math.ceil(num_variables/self.fig_ncols)
+        fig, axs = plt.subplots(nrows=nrows, ncols=ncols, figsize=figsize)
         axs = axs.flatten()
         for i, var in enumerate(self.variable_names):
-            self.variable_calibration_plot(metric, var, k=k, log_bins=log_bins, ax=axs[i])
+            self.variable_calibration_plot(metric, var, k=k, log_bins=log_bins, ax=axs[i], hi_bound=hi_bounds[i], **kwargs)
             axs[i].set_title(var)
         fig.suptitle(metric+" calibration plot")
+        if num_variables%self.fig_ncols!=0: fig.delaxes(axs.flatten()[-1])
+        if fig_ncols is not None: self.fig_ncols = previous_ncols
         return axs
-
-
 #     def plot_metric(self, metric: str, ax):
 #         pass
 
