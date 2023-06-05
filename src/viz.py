@@ -83,13 +83,16 @@ class ExperimentVisualizer():
         pvmdf = vmdf[~vmdf.group.isin(["global", "west", "north", "east"])]
         sns.scatterplot(data=pvmdf, x=self.exp_var_name, y="x", alpha=0.3, ax=ax)
         sns.lineplot(data=gvmdf, x=self.exp_var_name, y="x", ax=ax)
+        ax.set_ylabel(metric)
         return ax
 
-    def metric_plot(self, metric, kind, figsize=(12, 18)):
+    def metric_plot(self, metric, kind, figsize=(12, 18), fig_ncols=None):
         num_variables = len(self.variable_names)
+        if fig_ncols is not None:
+            previous_ncols = self.fig_ncols
+            self.fig_ncols = fig_ncols
         ncols = self.fig_ncols
         nrows = 1 if self.fig_ncols>=num_variables else math.ceil(num_variables/self.fig_ncols)
-        print(ncols, nrows)
         fig, axs = plt.subplots(nrows=nrows, ncols=ncols, figsize=figsize)
         axs = axs.flatten()
         for i, var in enumerate(self.variable_names):
@@ -97,6 +100,40 @@ class ExperimentVisualizer():
             axs[i].set_title(var)
         fig.suptitle(metric)
         if num_variables%self.fig_ncols!=0: fig.delaxes(axs.flatten()[-1])
+        if fig_ncols is not None: self.fig_ncols = previous_ncols
+        return axs
+
+    def variable_metric_boxplot(self, metric, variable, kind, exp_var_bins=None, ax=None, fig_ncols=None):
+        if ax is None:
+            fig, ax = plt.subplots()
+        # plot global for each variable
+        vmdf = self.df.query(f"kind == '{kind}'").copy()
+        vmdf = vmdf.query(f"metric == '{metric}' & variable == '{variable}'")
+        gvmdf = vmdf.query("group=='global'")
+        if exp_var_bins is None:
+            sns.boxplot(data=gvmdf, y="x", ax=ax)
+        else:
+            bin_strings = [f"{exp_var_bins[i]}-{exp_var_bins[i+1]}" for i in range(len(exp_var_bins)-1)]
+            gvmdf.loc[:,self.exp_var_name] = [bin_strings[i-1] for i in np.digitize(gvmdf[self.exp_var_name].values, bins=exp_var_bins)]
+            sns.boxplot(data=gvmdf, y="x", x=self.exp_var_name, ax=ax, order=bin_strings)
+        ax.set_ylabel(metric)
+        return ax
+
+    def metric_boxplot(self, metric, kind, exp_var_bins=None, figsize=(12, 18), fig_ncols=None):
+        num_variables = len(self.variable_names)
+        if fig_ncols is not None:
+            previous_ncols = self.fig_ncols
+            self.fig_ncols = fig_ncols
+        ncols = self.fig_ncols
+        nrows = 1 if self.fig_ncols>=num_variables else math.ceil(num_variables/self.fig_ncols)
+        fig, axs = plt.subplots(nrows=nrows, ncols=ncols, figsize=figsize)
+        axs = axs.flatten()
+        for i, var in enumerate(self.variable_names):
+            self.variable_metric_boxplot(metric, var, kind, exp_var_bins, axs[i], fig_ncols)
+            axs[i].set_title(var)
+        fig.suptitle(metric)
+        if num_variables%self.fig_ncols!=0: fig.delaxes(axs.flatten()[-1])
+        if fig_ncols is not None: self.fig_ncols = previous_ncols
         return axs
     
     def variable_calibration_plot(self, metric, variable, k=100, log_bins=False, ax=None, hi_bound=np.inf, palette=None, show_legend=True):
@@ -152,6 +189,7 @@ class ExperimentVisualizer():
         if num_variables%self.fig_ncols!=0: fig.delaxes(axs.flatten()[-1])
         if fig_ncols is not None: self.fig_ncols = previous_ncols
         return axs
+    
 #     def plot_metric(self, metric: str, ax):
 #         pass
 
