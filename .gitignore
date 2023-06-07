@@ -20,6 +20,7 @@ credentials.json
 token.json
 gee_data*/
 results_copy
+images/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

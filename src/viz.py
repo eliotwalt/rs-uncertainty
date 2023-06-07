@@ -1,11 +1,14 @@
 import wandb
 import pandas as pd
 import matplotlib.pyplot as plt 
+import matplotlib.patches as patches
 import tempfile
 import math
 import json
 import os
 import seaborn as sns
+import rasterio
+from pathlib import Path
 import numpy as np
 from .metrics import StratifiedRCU
 sns.set()
@@ -190,107 +193,474 @@ class ExperimentVisualizer():
         if fig_ncols is not None: self.fig_ncols = previous_ncols
         return axs
     
-#     def plot_metric(self, metric: str, ax):
-#         pass
+def clip(arr, bounds):
+    bounds = (float(bounds[0]), float(bounds[1]))
+    arr = np.where(arr>bounds[1], bounds[1], arr)
+    arr = np.where(arr<bounds[0], bounds[0], arr)
+    arr -= bounds[0]
+    arr /= (bounds[1]-bounds[0])
+    return arr
 
-#     def plot_ause(self, metric: str, ax):
-#         pass
+def norm2d(x, mn=None, mx=None, a=0, b=1): 
+    if mn is None: mn = np.nanmin(x)
+    if mx is None: mx = np.nanmax(x)
+    return (b-a)*(x-mn)/(mx-mn)+a
 
-#     def plot_(): pass
+def savefigure(fig, name):
+    Path(name).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(name+".png", dpi=300)
+    fig.savefig(name+".pdf", dpi=200)
 
-# class LocalExperimentVisualizer():
-#     def __init__(
-#         self,
-#         paths,
-#         add_baseline: bool=True
-#     ):
-#         self.add_baseline = add_baseline
-#         if self.add_baseline: self.add_baseline: self.baseline_rcu, self.rcus = self._get_rcus()
-#         else: else: self.rcus = self._get_rcus()
-#         self.df = self._build_df()
+def showRGB(dirs, s2repr_dirs, titles=None, islice=None, jslice=None, draw_bbox=False, 
+            figsize=(12, 4), split_mask=None, save_name=None, color="g"):
+    n = len(dirs)
+    fig, axs = plt.subplots(ncols=len(dirs), nrows=1, figsize=figsize)
+    if len(titles)>1: axs = axs.flatten()
+    else: axs = [axs]
+    i = 0
+    for d, ax in zip(dirs, axs):
+        dir_name = d.split("/")[-1]
+        pid = dir_name.split("_")[0]
+        img_path = list(Path(os.path.join(s2repr_dirs, dir_name, pid)).glob("*.tif"))[0]
+        title = i if titles is None else titles[i]
+        with rasterio.open(img_path) as f:
+            rgb = f.read([4,3,2])
+            rgb = clip(rgb, (100, 2000))
+            rgb = rgb.transpose(1,2,0)
+            if islice is not None and jslice is not None: 
+                if not isinstance(islice, list): islice = [islice]
+                if not isinstance(jslice, list): jslice = [jslice]
+                if isinstance(color, list): assert len(color)==len(islice)
+                assert len(islice)==len(jslice)
+                for i, (islc, jslc) in enumerate(zip(islice, jslice)):
+                    if not draw_bbox:
+                        rgb = rgb[islc,jslc]
+                        ax.imshow(rgb)
+                        if split_mask is not None:
+                            ax.imshow(split_mask[islc, jslc], alpha=0.2)
+                    else:
+                        ax.imshow(rgb)
+                        if split_mask is not None:
+                            ax.imshow(split_mask, alpha=0.2)
+                        if isinstance(color, list): kw = {"color": color[i]}
+                        elif isinstance(color, str): kw = {"color": color}
+                        else: kw={}
+                        ax.add_patch(
+                            patches.Rectangle(
+                                (jslc.start, islc.start), # top left corner
+                                jslc.stop-jslc.start, # positive width
+                                islc.stop-islc.start, # positive height
+                                linewidth=2,
+                                fill=False,
+                                **kw
+                            )
+                        )
+            else:
+                ax.imshow(rgb)
+        ax.set_title(title)
+        ax.set_axis_off()
+        i += 1
+    plt.tight_layout()
+    if save_name is not None: savefigure(fig, save_name)
+    plt.show()
 
-#     def 
-
-# class WandBExperimentVisualizer():
-#     def __init__(
-#         self,
-#         entity: str,
-#         project: str,
-#         filter_tag: str,
-#         variable_name: str,
-#         add_baseline: bool=True,
-#     ):
-#         self.root = f"{entity}/{project}"
-#         self.entiy = entity
-#         self.project = project
-#         self.variable_name = variable_name
-#         self.filter_tag = filter_tag
-#         self.add_baseline = add_baseline
-#         if self.add_baseline: self.baseline, self.runs = self._get_runs()
-#         else: self.runs = self._get_runs()
-#         if self.add_baseline: self.baseline_rcu, self.rcus = self._get_rcus()
-#         else: self.rcus = self._get_rcus()
-#         self.df = self._build_df()
+def showPairedMaps(matching_dirs, variable_index, variable_name, islice=None, jslice=None, 
+                     normalize=False, save_name=None):
+    fig, axs = plt.subplots(nrows=len(matching_dirs), ncols=6, figsize=(20,15))
+    for i, (orig_dir, gee_dir) in enumerate(matching_dirs):
+        pid = gee_dir.name.split("_")[0]
+        # means
+        with rasterio.open(os.path.join(gee_dir, f"{pid}_mean.tif")) as f:
+            gee_mean = f.read(variable_index)
+            if islice is not None: gee_mean = gee_mean[islice]
+            if jslice is not None: gee_mean = gee_mean[:,jslice]
+        with rasterio.open(os.path.join(orig_dir, f"{pid}_mean.tif")) as f:
+            orig_mean = f.read(variable_index)
+            if islice is not None: orig_mean = orig_mean[islice]
+            if jslice is not None: orig_mean = orig_mean[:,jslice]
+        # variances
+        with rasterio.open(os.path.join(gee_dir, f"{pid}_variance.tif")) as f:
+            gee_variance = f.read(variable_index)
+            if islice is not None: gee_variance = gee_variance[islice]
+            if jslice is not None: gee_variance = gee_variance[:,jslice]
+        with rasterio.open(os.path.join(orig_dir, f"{pid}_variance.tif")) as f:
+            orig_variance = f.read(variable_index)
+            if islice is not None: orig_variance = orig_variance[islice]
+            if jslice is not None: orig_variance = orig_variance[:,jslice]
+        if normalize:
+            # get stats
+            meanmax, meanmin = np.nanmax(orig_mean), np.nanmin(orig_mean)
+            variancemax, variancemin = np.nanmax(orig_variance), np.nanmin(orig_variance)
+            # apply
+            gee_mean = norm2d(gee_mean, meanmin, meanmax)
+            orig_mean = norm2d(orig_mean, meanmin, meanmax)
+            gee_variance = norm2d(gee_variance, variancemin, variancemax)
+            orig_variance = norm2d(orig_variance, variancemin, variancemax)
+        meandiff = gee_mean-orig_mean
+        variancediff = gee_variance-orig_variance
+        sns.heatmap(orig_mean, ax=axs[i,0], 
+            vmin=min(np.nanmin(gee_mean), np.nanmean(orig_mean)), 
+            vmax=max(np.nanmax(gee_mean), np.nanmax(orig_mean))
+        )
+        axs[i,0].set_title(f"{orig_dir.name}\norig_mean")
+        sns.heatmap(gee_mean, ax=axs[i,1], 
+            vmin=min(np.nanmin(gee_mean), np.nanmean(orig_mean)), 
+            vmax=max(np.nanmax(gee_mean), np.nanmax(orig_mean))
+        )
+        axs[i,1].set_title(f"{orig_dir.name}\ngee_mean")
+        sns.heatmap(meandiff, ax=axs[i,2], cmap="bwr", vmin=-1, vmax=1)
+        axs[i,2].set_title(f"{orig_dir.name}\ndiff_mean")
+        sns.heatmap(orig_variance, ax=axs[i,3], 
+            vmin=min(np.nanmin(gee_variance), np.nanmean(orig_variance)), 
+            vmax=max(np.nanmax(gee_variance), np.nanmax(orig_variance))
+        )
+        axs[i,3].set_title(f"{orig_dir.name}\norig_variance")
+        sns.heatmap(gee_variance, ax=axs[i,4], 
+            vmin=min(np.nanmin(gee_variance), np.nanmean(orig_variance)), 
+            vmax=max(np.nanmax(gee_variance), np.nanmax(orig_variance))
+        )
+        axs[i,4].set_title(f"{orig_dir.name}\ngee_variance")
+        sns.heatmap(variancediff, ax=axs[i,5], cmap="bwr", vmin=-1, vmax=1)
+        axs[i,5].set_title(f"{orig_dir.name}\ndiff_variance")
+    for ax in axs.flatten(): ax.set_axis_off()
+    axs[0,0]
+    fig.suptitle(variable_name)
+    plt.tight_layout()
+    if save_name is not None: savefigure(fig, save_name)
+    plt.show()
     
-#     def _get_runs(self):
-#         api = wandb.Api()
-#         if self.add_baseline:
-#             baselines = api.runs(path=self.root, filters={"tags": "baseline"})
-#             assert len(baselines)==1, "Multiple baseline runs were found: {}".format(", ".join(b.name for b in baselines))
-#         variable_runs = api.runs(path=self.root, filters={"tags": self.filter_tag})
-#         print(f"Found {len(variable_runs)} runs for experiment on variable {self.variable_name}.")
-#         if self.add_baseline: return baselines[0], variable_runs
-#         else: return variable_runs
+def showVariableHistograms(matching_dirs, variable_index, variable_name, islice=None, jslice=None, 
+                           log_mean=False, log_variance=False, save_name=None):
+    fig, axs = plt.subplots(nrows=len(matching_dirs), ncols=2, figsize=(10, 15))
+    for i, (orig_dir, gee_dir) in enumerate(matching_dirs):
+        pid = gee_dir.name.split("_")[0]
+        # means
+        with rasterio.open(os.path.join(gee_dir, f"{pid}_mean.tif")) as f:
+            gee_mean = f.read(variable_index)
+            if islice is not None and jslice is not None: gee_mean = gee_mean[islice, jslice]
+            gee_mean = gee_mean.flatten()
+        with rasterio.open(os.path.join(orig_dir, f"{pid}_mean.tif")) as f:
+            orig_mean = f.read(variable_index)
+            if islice is not None and jslice is not None: orig_mean = orig_mean[islice, jslice]
+            orig_mean = orig_mean.flatten()
+        # variances
+        with rasterio.open(os.path.join(gee_dir, f"{pid}_variance.tif")) as f:
+            gee_variance = f.read(variable_index)
+            if islice is not None and jslice is not None: gee_variance = gee_variance[islice, jslice]
+            gee_variance = gee_variance.flatten()
+        with rasterio.open(os.path.join(orig_dir, f"{pid}_variance.tif")) as f:
+            orig_variance = f.read(variable_index)
+            if islice is not None and jslice is not None: orig_variance = orig_variance[islice, jslice]
+            orig_variance = orig_variance.flatten()
+        km = "mean" if not log_mean else "log_mean"
+        mdf = pd.DataFrame({
+            "source": ["original" for _ in orig_mean]+["gee" for _ in gee_mean],
+            km: orig_mean.tolist()+gee_mean.tolist()
+        })
+        kv = "variance" if not log_variance else "log_variance"
+        vdf = pd.DataFrame({
+            "source": ["original" for _ in orig_variance]+["gee" for _ in gee_variance],
+            kv: orig_variance.tolist()+gee_variance.tolist()
+        })
+        sns.histplot(data=mdf, x=km, hue="source", ax=axs[i,0])
+        axs[i,0].set_title(f"{orig_dir.name}")
+        if log_mean: axs[i,0].set_xscale("log")
+        sns.histplot(data=vdf, x=kv, hue="source", ax=axs[i,1])
+        axs[i,1].set_title(f"{orig_dir.name}")
+        if log_variance: axs[i,1].set_xscale("log")
+    fig.suptitle(variable_name)
+    plt.tight_layout()
+    if save_name is not None: savefigure(fig, save_name)
+    plt.show()
     
-#     def _get_rcus(self):
-#         def download_rcu(run, path):
-#             with tempfile.TemporaryDirectory() as d:
-#                 with run.file(path).download(d) as f:
-#                     data = json.load(f)
-#             return StratifiedRCU.from_json(data)
-#         if self.add_baseline:
-#             path = list(filter(lambda x: x.name.endswith("rcu.json"), list(self.baseline.file)))[0]
-#             baseline_rcu = download_rcu(self.baseline, path)
-#         rcus = []
-#         for run in self.runs:
-#             path = list(filter(lambda x: x.name.endswith("rcu.json"), list(run.file)))[0]
-#             # download json
-#             rcus.append(download_rcu(run, path))
-#         if self.add_baseline: return baseline_rcu, rcus
-#         else: return rcus
+def showPredictionMaps(dirs, titles, variable_index, variable_name, s2repr_dirs, gt_dir, 
+                        islice=None, jslice=None, normalize=False, save_name=None):
+    fig, axs = plt.subplots(nrows=len(titles), ncols=6, figsize=(20,12))
+    for i, d in enumerate(dirs):
+        dir_name = d.split("/")[-1]
+        pid = dir_name.split("_")[0]
+        img_path = list(Path(os.path.join(s2repr_dirs, dir_name, pid)).glob("*.tif"))[0]
+        mean_path = Path(os.path.join(d, f"{pid}_mean.tif"))
+        variance_path = Path(os.path.join(d, f"{pid}_variance.tif"))
+        gt_path = os.path.join(gt_dir, f"{pid}.tif")
+        with rasterio.open(img_path) as f:
+            rgb = f.read([4,3,2])
+            rgb = clip(rgb, (100, 2000))
+            rgb = rgb.transpose(1,2,0)
+            if islice is not None: rgb = rgb[islice]
+            if jslice is not None: rgb = rgb[:,jslice]
+        with rasterio.open(gt_path) as f:
+            gt = f.read(variable_index)
+            gt_mask = f.read_masks(1)//255
+            gt[gt_mask==0]=np.nan
+            if islice is not None: gt = gt[islice]
+            if jslice is not None: gt = gt[:,jslice]
+        with rasterio.open(mean_path) as f:
+            mean = f.read(variable_index)
+            if islice is not None: mean = mean[islice]
+            if jslice is not None: mean = mean[:,jslice]
+        with rasterio.open(variance_path) as f:
+            variance = f.read(variable_index)
+            if islice is not None: variance = variance[islice]
+            if jslice is not None: variance = variance[:,jslice]
+        if normalize:
+            # get stats
+            rgbmax, rgbmin = np.nanmax(rgb, axis=(0,1)), np.nanmin(rgb, axis=(0,1))
+            gtmax, gtmin = np.nanmax(gt), np.nanmin(gt)
+            variancemax, variancemin = np.nanmax(variance), np.nanmin(variance)
+            # apply
+            rgb = norm2d(rgb, rgbmin, rgbmax)
+            gt = norm2d(gt, gtmin, gtmax)
+            mean = norm2d(mean, gtmin, gtmax)
+            variance = norm2d(variance, variancemin, variancemax)
+        rerror = mean-gt
+        cerror = np.sqrt(rerror**2)-np.sqrt(variance)
+        axs[i,0].imshow(rgb)
+        axs[i,0].set_title(f"{titles[i]} - rgb")
+        sns.heatmap(gt, ax=axs[i,1], 
+            vmin=min(np.nanmin(mean), np.nanmean(gt)), 
+            vmax=max(np.nanmax(mean), np.nanmax(gt))
+        )
+        axs[i,1].set_title(f"{titles[i]} - gt")
+        # break
+        sns.heatmap(mean, ax=axs[i,2], 
+            vmin=min(np.nanmin(mean), np.nanmean(gt)), 
+            vmax=max(np.nanmax(mean), np.nanmax(gt))
+        )
+        axs[i,2].set_title(f"{titles[i]} - mean")
+        sns.heatmap(variance, ax=axs[i,3], vmin=np.nanmin(variance), vmax=np.nanmax(variance))
+        axs[i,3].set_title(f"{titles[i]} - variance")
+        sns.heatmap(rerror, ax=axs[i,4], vmin=-1, vmax=1)
+        axs[i,4].set_title(f"{titles[i]} - r-error")
+        sns.heatmap(cerror, ax=axs[i,5], vmin=-1, vmax=1)
+        axs[i,5].set_title(f"{titles[i]} - c-error")
+    for ax in axs.flatten(): ax.set_axis_off()
+    fig.suptitle(variable_name)
+    plt.tight_layout()
+    if save_name is not None: savefigure(fig, save_name)
+    plt.show()
     
-#     # def _build_df(self):
-#     #     def fill_run(run, df_dict, experiment):
-#     #         for key, value in run.summary.items():
-#     #             try:
-#     #                 kind, metric, variable, group = key.split("-")
-#     #                 df_dict["experiment"].append(experiment)
-#     #                 df_dict[self.variable_name].append(run.config[self.variable_name])
-#     #                 df_dict["kind"].append(kind)
-#     #                 df_dict["metric"].append(metric)
-#     #                 df_dict["variable"].append(variable)
-#     #                 df_dict["group"].append(group)
-#     #                 df_dict["value"].append(value)
-#     #             except:
-#     #                 pass
-#     #         return df_dict
-#     #     dict_df = { "experiment": [],self.variable_name: [],"kind": [],"metric": [],"variable": [],"group": [],"value": []}
-#     #     for run in self.runs: dict_df = fill_run(run, dict_df, "cloud_threshold")
-#     #     if self.add_baseline: dict_df = fill_run(self.baseline, dict_df, f"baseline ({self.baseline.config[self.variable_name]})")      
-#     #     return pd.DataFrame(dict_df)
+def showOneImageVariableResults(dir_, title, variable_index, variable_name, s2repr_dirs, gt_dir, 
+                                islice=None, jslice=None, normalize=False, save_name=None):
+    fig, axs = plt.subplots(nrows=1, ncols=6, figsize=(20,3))
+    dir_name = dir_.split("/")[-1]
+    pid = dir_name.split("_")[0]
+    img_path = list(Path(os.path.join(s2repr_dirs, dir_name, pid)).glob("*.tif"))[0]
+    mean_path = Path(os.path.join(dir_, f"{pid}_mean.tif"))
+    variance_path = Path(os.path.join(dir_, f"{pid}_variance.tif"))
+    gt_path = os.path.join(gt_dir, f"{pid}.tif")
+    with rasterio.open(img_path) as f:
+        rgb = f.read([4,3,2])
+        rgb = clip(rgb, (100, 2000))
+        rgb = rgb.transpose(1,2,0)
+        if islice is not None: rgb = rgb[islice]
+        if jslice is not None: rgb = rgb[:,jslice]
+    with rasterio.open(gt_path) as f:
+        gt = f.read(variable_index)
+        gt_mask = f.read_masks(1)//255
+        gt[gt_mask==0]=np.nan
+        if islice is not None: gt = gt[islice]
+        if jslice is not None: gt = gt[:,jslice]
+    with rasterio.open(mean_path) as f:
+        mean = f.read(variable_index)
+        if islice is not None: mean = mean[islice]
+        if jslice is not None: mean = mean[:,jslice]
+    with rasterio.open(variance_path) as f:
+        variance = f.read(variable_index)
+        if islice is not None: variance = variance[islice]
+        if jslice is not None: variance = variance[:,jslice]
+    if normalize:
+        # get stats
+        rgbmax, rgbmin = np.nanmax(rgb, axis=(0,1)), np.nanmin(rgb, axis=(0,1))
+        gtmax, gtmin = np.nanmax(gt), np.nanmin(gt)
+        variancemax, variancemin = np.nanmax(variance), np.nanmin(variance)
+        # apply
+        rgb = norm2d(rgb, rgbmin, rgbmax)
+        gt = norm2d(gt, gtmin, gtmax)
+        mean = norm2d(mean, gtmin, gtmax)
+        variance = norm2d(variance, variancemin, variancemax)
+    rerror = mean-gt
+    cerror = np.sqrt(rerror**2)-np.sqrt(variance)
+    axs[0].imshow(rgb)
+    axs[0].set_title(f"{title} - rgb")
+    sns.heatmap(gt, ax=axs[1], 
+        vmin=min(np.nanmin(mean), np.nanmean(gt)), 
+        vmax=max(np.nanmax(mean), np.nanmax(gt))
+    )
+    axs[1].set_title(f"{title} - gt")
+    # break
+    sns.heatmap(mean, ax=axs[2], 
+        vmin=min(np.nanmin(mean), np.nanmean(gt)), 
+        vmax=max(np.nanmax(mean), np.nanmax(gt))
+    )
+    axs[2].set_title(f"{title} - mean")
+    sns.heatmap(variance, ax=axs[3], vmin=np.nanmin(variance), vmax=np.nanmax(variance))
+    axs[3].set_title(f"{title} - variance")
+    sns.heatmap(rerror, ax=axs[4], vmin=-1, vmax=1)
+    axs[4].set_title(f"{title} - r-error")
+    sns.heatmap(cerror, ax=axs[5], vmin=-1, vmax=1)
+    axs[5].set_title(f"{title} - c-error")
+    for ax in axs.flatten(): ax.set_axis_off()
+    fig.suptitle(variable_name)
+    plt.tight_layout()
+    if save_name is not None: savefigure(fig, save_name)
+    plt.show()
+    
+def CompareMapsStats(matching_dirs, variable_names, split_mask=None, split=None):
+    mean_stats = {"variable": [], "stat": [], "original": [], "gee": [], "delta": [], "relative delta (%)": []}
+    variance_stats = {"variable": [], "stat": [], "original": [], "gee": [], "delta": [], "relative delta (%)": []}
+    if split_mask is not None or split is not None: 
+        assert split_mask is not None and split is not None
+        split_ = split
+        split = ["train", "val", "test"].index(split)
+        mean_stats["split"] = []
+        variance_stats["split"] = []    
+    for i, (orig_dir, gee_dir) in enumerate(matching_dirs):
+        pid = gee_dir.name.split("_")[0]
+        # means
+        with rasterio.open(os.path.join(gee_dir, f"{pid}_mean.tif")) as f:
+            n = f.count
+            gee_mean = f.read(f.indexes)
+            if split_mask is not None: gee_mean = gee_mean[:,split_mask==split]
+            else: gee_mean = gee_mean.reshape(gee_mean.shape[0], -1)
+        with rasterio.open(os.path.join(orig_dir, f"{pid}_mean.tif")) as f:
+            orig_mean = f.read(f.indexes)
+            if split_mask is not None: orig_mean = orig_mean[:,split_mask==split]
+            else: orig_mean = orig_mean.reshape(orig_mean.shape[0], -1)
+        with rasterio.open(os.path.join(gee_dir, f"{pid}_variance.tif")) as f:
+            gee_variance = f.read(f.indexes)
+            if split_mask is not None: gee_variance = gee_variance[:,split_mask==split]
+            else: gee_variance = gee_variance.reshape(gee_variance.shape[0], -1)
+        with rasterio.open(os.path.join(orig_dir, f"{pid}_variance.tif")) as f:
+            orig_variance = f.read(f.indexes)
+            if split_mask is not None: orig_variance = orig_variance[:,split_mask==split]
+            else: orig_variance = orig_variance.reshape(orig_variance.shape[0], -1)
+        for f, fn in zip([np.nanmin, np.nanmax, np.nanmean, np.nanstd, np.nanmedian], 
+                         ["min", "max", "mean", "median", "std"]):
+            # mean
+            mean_stats["variable"].extend(variable_names)
+            mean_stats["stat"].extend([fn for _ in range(1, n+1)])
+            mean_stats["original"].extend(f(orig_mean, axis=1).tolist())
+            mean_stats["gee"].extend(f(gee_mean, axis=1).tolist())
+            mean_stats["delta"].extend((f(gee_mean, axis=1)-f(orig_mean, axis=1)).tolist())
+            mean_stats["relative delta (%)"].extend(
+                ((f(gee_mean, axis=1)-f(orig_mean, axis=1))/f(orig_mean, axis=1)*100).tolist()
+            )
+            if split is not None:
+                mean_stats["split"].extend([split_ for _ in range(1, n+1)])
+            # variance
+            variance_stats["variable"].extend(variable_names)
+            variance_stats["stat"].extend([fn for _ in range(1, n+1)])
+            variance_stats["original"].extend(f(orig_variance, axis=1).tolist())
+            variance_stats["gee"].extend(f(gee_variance, axis=1).tolist())
+            variance_stats["delta"].extend((f(gee_variance, axis=1)-f(orig_variance, axis=1)).tolist())
+            variance_stats["relative delta (%)"].extend(
+                ((f(gee_variance, axis=1)-f(orig_variance, axis=1))/f(orig_variance, axis=1)*100).tolist()
+            )
+            if split is not None:
+                variance_stats["split"].extend([split_ for _ in range(1, n+1)])
+        return pd.DataFrame(mean_stats), pd.DataFrame(variance_stats)
+    
+def evaluateSplit(prediction_dir, gt_dir, split_mask, split):
+    split_id = ["train", "val", "test"].index(split)
+    # Load data
+    vpath = list(Path(prediction_dir).glob("*_variance.tif"))[0]
+    project = vpath.stem.split("_")[0]
+    with rasterio.open(vpath) as f:
+        variance = f.read(f.indexes)
+        variance[:,split_mask!=split_id] = np.nan
+    with rasterio.open(os.path.join(prediction_dir, f"{project}_mean.tif")) as f:
+        mean = f.read(f.indexes)
+        mean[:,split_mask!=split_id] = np.nan
+    with rasterio.open(os.path.join(gt_dir, f"{project}.tif")) as f:
+        gt = f.read(f.indexes)
+        gt[:,split_mask!=split_id] = np.nan
+    rcu = StratifiedRCU(
+        num_variables=variance.shape[0],
+        num_groups=1,
+        num_bins=1500,
+        lo_variance=np.nanmin(variance, axis=(1,2)),
+        hi_variance=np.nanmax(variance, axis=(1,2)),
+    )
+    rcu.add_project(project, gt, mean, variance)
+    return rcu
+    
+def loadMetricsDataFrame(matching_dirs, metrics=["mse", "ence", "auce", "cv"], 
+                         variable_names=['P95', 'MeanH', 'Dens', 'Gini', 'Cover'],
+                         split_mask=None, split=None, gt_dir=None):
+    if split_mask is not None or split is not None: 
+        assert split_mask is not None and split is not None and gt_dir is not None
+    metric_query = " | ".join([f"metric == '{m}'" for m in metrics])
+    # find matching rcus
+    format_df = lambda df: (df.query("group != 'global' & kind == 'agg'")
+                         .query(metric_query)
+                         .drop(["group", "kind"], axis=1))
+    data = {"metric": [],
+            "variable": [],
+            "imageId": [],
+            "source": [],
+            "x": []}
+    if split: data["split"] = []
+    for orig_dir, gee_dir in matching_dirs:
+        # load dataframes
+        if split_mask is not None:
+            print(f"Re-evaluating GEE for {split}")
+            gee_rcu = evaluateSplit(gee_dir, gt_dir, split_mask, split)
+            print(f"Re-evaluating original for {split}")
+            orig_rcu = evaluateSplit(orig_dir, gt_dir, split_mask, split)
+        else:
+            gee_rcu = StratifiedRCU.from_json(os.path.join(gee_dir.path, "rcu.json"))
+            orig_rcu = StratifiedRCU.from_json(os.path.join(orig_dir.path, "rcu.json"))
+        gee_rcu.get_results_df(groups={}, variable_names=variable_names)
+        orig_rcu.get_results_df(groups={}, variable_names=variable_names)
+        gee_df = format_df(gee_rcu.results)
+        orig_df = format_df(orig_rcu.results)
+        # get results
+        for gt, ot in zip(gee_df.itertuples(), orig_df.itertuples()):
+            assert gt.metric==ot.metric
+            assert gt.variable==ot.variable
+            data["metric"].extend([gt.metric, ot.metric])
+            data["variable"].extend([gt.variable, ot.variable])
+            data["imageId"].extend([gee_dir.name, orig_dir.name])
+            data["source"].extend(["gee", "original"])
+            data["x"].extend([gt.x, ot.x])
+            if split: data["split"].extend([split, split])
+    fulldf = pd.DataFrame(data)
+    return fulldf
 
-    
-# class CloudThresholdVisualizer(ExperimentVisualizer):
-#     def __init__(
-#         self,
-#         entity: str,
-#         project: str,
-#         add_baseline: bool=True,
-#     ): 
-#         super().__init__(
-#             entity, project, 
-#             filter_tag="cloud_threshold", 
-#             variable_name="dataset.cloudy_pixels_threshold", 
-#             add_baseline=add_baseline
-#         )
-
+def plotTrainTestMetricsDataFrames(train_df, test_df, save_name=None):
+    metrics_df = pd.concat([train_df, test_df])
+    fig, axs = plt.subplots(
+        nrows=len(metrics_df.metric.unique()),
+        ncols=len(metrics_df.variable.unique()),
+        figsize=(15, 13)
+    )
+    def row2idx(x, anchors):
+        anchor = anchors[0] if x["split"]=="train" else anchors[1]
+        offset = 0.5 if x["source"] == "gee" else -0.5
+        return anchor+offset 
+    a = [0.5, 2.5]
+    for i, m in enumerate(metrics_df.metric.unique()):
+        for j, v in enumerate(metrics_df.variable.unique()):
+            tmp = (metrics_df
+                   .query(f"metric == '{m}' & variable == '{v}'")
+                   .drop(columns=["metric", "variable", "imageId"]))
+            tmp = tmp.assign(source_=tmp.apply(row2idx, axis=1, anchors=a).values)
+            mtmp = (tmp
+               .groupby(by=["source", "split"])
+               .mean()
+               .reset_index())
+            sns.scatterplot(data=tmp, x="source_", y="x", hue="source", ax=axs[i,j], alpha=0.3, s=50)
+            sns.scatterplot(data=mtmp, x="source_", y="x", hue="source", ax=axs[i,j], s=100)
+            axs[i,j].set_xticks(ticks=[a[0]-0.5,a[0],a[0]+0.5,a[1]-0.5,a[1],a[1]+0.5], 
+                                labels=["original", "\ntrain", "gee", "original", "\ntest","gee"])
+            axs[i,j].get_legend().remove()
+            axs[i,j].set_xlabel("")
+            axs[i,j].set_ylabel("")
+            if i==0:
+                axs[i,j].set_title(v)
+            if j==0:
+                axs[i,j].set_ylabel(m)
+    plt.tight_layout()
+    if save_name is not None: savefigure(fig, save_name)
+    plt.show()
