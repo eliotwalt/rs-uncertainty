@@ -89,7 +89,7 @@ class ExperimentVisualizer():
             ax.legend(loc="upper right")
         return ax
     
-    def histogram_plot(self, hi_bounds=np.inf, log=True, figsize=(12, 18), **kwargs):
+    def histogram_plot(self, hi_bounds=np.inf, log=True, figsize=(12, 18), save_name=None, **kwargs):
         if not isinstance(hi_bounds, list): hi_bounds = [hi_bounds for _ in range(len(self.variable_names))]
         num_variables = len(self.variable_names)
         ncols = self.fig_ncols
@@ -99,7 +99,10 @@ class ExperimentVisualizer():
         for i, var in enumerate(self.variable_names):
             self.variable_histogram_plot(var, axs[i], hi_bounds[i], log, **kwargs)
             axs[i].set_title(var)
-        if num_variables%self.fig_ncols!=0: fig.delaxes(axs.flatten()[-1])    
+        if num_variables%self.fig_ncols!=0: fig.delaxes(axs.flatten()[-1])
+        if save_name is not None: 
+            fig.tight_layout()
+            savefigure(fig, save_name)
         return axs
 
     def variable_metric_plot(self, metric, variable, kind, ax=None):
@@ -115,7 +118,7 @@ class ExperimentVisualizer():
         ax.set_ylabel(metric)
         return ax
 
-    def metric_plot(self, metric, kind, figsize=(12, 18), fig_ncols=None):
+    def metric_plot(self, metric, kind, figsize=(12, 18), fig_ncols=None, save_name=None):
         num_variables = len(self.variable_names)
         if fig_ncols is not None:
             previous_ncols = self.fig_ncols
@@ -127,9 +130,13 @@ class ExperimentVisualizer():
         for i, var in enumerate(self.variable_names):
             self.variable_metric_plot(metric, var, kind, axs[i])
             axs[i].set_title(var)
+            axs[i].set_ylabel("")
         fig.suptitle(metric)
         if num_variables%self.fig_ncols!=0: fig.delaxes(axs.flatten()[-1])
         if fig_ncols is not None: self.fig_ncols = previous_ncols
+        if save_name is not None: 
+            fig.tight_layout()
+            savefigure(fig, save_name)
         return axs
 
     def variable_metric_boxplot(self, metric, variable, kind, exp_var_bins=None, ax=None, fig_ncols=None):
@@ -148,7 +155,7 @@ class ExperimentVisualizer():
         ax.set_ylabel(metric)
         return ax
 
-    def metric_boxplot(self, metric, kind, exp_var_bins=None, figsize=(12, 18), fig_ncols=None):
+    def metric_boxplot(self, metric, kind, exp_var_bins=None, figsize=(12, 18), fig_ncols=None, save_name=None):
         num_variables = len(self.variable_names)
         if fig_ncols is not None:
             previous_ncols = self.fig_ncols
@@ -160,9 +167,13 @@ class ExperimentVisualizer():
         for i, var in enumerate(self.variable_names):
             self.variable_metric_boxplot(metric, var, kind, exp_var_bins, axs[i], fig_ncols)
             axs[i].set_title(var)
+            axs[i].set_ylabel("")
         fig.suptitle(metric)
         if num_variables%self.fig_ncols!=0: fig.delaxes(axs.flatten()[-1])
         if fig_ncols is not None: self.fig_ncols = previous_ncols
+        if save_name is not None: 
+            fig.tight_layout()
+            savefigure(fig, save_name)
         return axs
     
     def variable_calibration_plot(self, metric, variable, k=100, log_bins=False, ax=None, hi_bound=np.inf, palette=None, show_legend=True):
@@ -201,7 +212,7 @@ class ExperimentVisualizer():
         # ax.vlines(x=xc, ymin=lo, ymax=hi/5, color="black", ls="dashed")
         return ax
     
-    def calibration_plot(self, metric, k=100, log_bins=False, hi_bounds=np.inf, figsize=(12, 18), fig_ncols=None, **kwargs):
+    def calibration_plot(self, metric, k=100, log_bins=False, hi_bounds=np.inf, figsize=(12, 18), fig_ncols=None, save_name=None, **kwargs):
         if not isinstance(hi_bounds, list): hi_bounds = [hi_bounds for _ in range(len(self.variable_names))]
         num_variables = len(self.variable_names)
         if fig_ncols is not None:
@@ -217,6 +228,9 @@ class ExperimentVisualizer():
         fig.suptitle(metric+" calibration plot")
         if num_variables%self.fig_ncols!=0: fig.delaxes(axs.flatten()[-1])
         if fig_ncols is not None: self.fig_ncols = previous_ncols
+        if save_name is not None: 
+            fig.tight_layout()
+            savefigure(fig, save_name)
         return axs
     
 def clip(arr, bounds):
@@ -236,6 +250,51 @@ def savefigure(fig, name):
     Path(name).parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(name+".png", dpi=300)
     fig.savefig(name+".pdf", dpi=200)
+
+def showSplit(gt_path, split_mask, islices, jslices, 
+              patch_colors=["r", "b"], save_name=None):
+    reverse_split_mask = split_mask.copy()
+    reverse_split_mask[split_mask==0] = 2
+    reverse_split_mask[split_mask==2] = 0
+    split_mask = reverse_split_mask
+    fig = plt.figure(figsize=(5,4))
+    with rasterio.open(gt_path) as f:
+        gts = []
+        gt_mask = f.read_masks(1)//255
+        for i in range(1,f.count+1):
+            gt = f.read(i)
+            gt[gt_mask==0] = np.nan
+            gt[gt>0] = 100
+            gts.append(gt)
+        gt = np.nanmean(np.stack(gts, axis=0), axis=0)
+    g = sns.heatmap(split_mask, 
+                    cmap=sns.color_palette("gist_earth_r", 3), 
+                    alpha=0.3)
+    g = sns.heatmap(gt, cmap="Greys", ax=g, cbar=False)
+    # g = sns.heatmap(gt, cmap="Greys", cbar=False)
+    assert len(islices)==len(jslices)==len(patch_colors)
+    for i, (islc, jslc) in enumerate(zip(islices, jslices)):
+        g.add_patch(
+            patches.Rectangle(
+                (jslc.start, islc.start), # top left corner
+                jslc.stop-jslc.start, # positive width
+                islc.stop-islc.start, # positive height
+                linewidth=2,
+                fill=False,
+                color=patch_colors[i]
+            )
+        )
+    g.set_axis_off()
+    # modify colorbar:
+    colorbar = g.collections[0].colorbar 
+    r = colorbar.vmax - colorbar.vmin 
+    colorbar.set_ticks([colorbar.vmin + r / 3 * (0.5 + i) for i in range(3)])
+    colorbar.ax.set_yticklabels(["test", "validation", "train"])   
+    plt.tight_layout()
+    if save_name is not None:
+        fig.savefig(f"{save_name}.png", dpi=300)
+        fig.savefig(f"{save_name}.pdf", dpi=200)
+    plt.show()
 
 def showRGB(dirs, s2repr_dirs, titles=None, islice=None, jslice=None, draw_bbox=False, 
             figsize=(12, 4), split_mask=None, save_name=None, color="g"):
@@ -258,7 +317,7 @@ def showRGB(dirs, s2repr_dirs, titles=None, islice=None, jslice=None, draw_bbox=
                 if not isinstance(jslice, list): jslice = [jslice]
                 if isinstance(color, list): assert len(color)==len(islice)
                 assert len(islice)==len(jslice)
-                for i, (islc, jslc) in enumerate(zip(islice, jslice)):
+                for k, (islc, jslc) in enumerate(zip(islice, jslice)):
                     if not draw_bbox:
                         rgb = rgb[islc,jslc]
                         ax.imshow(rgb)
@@ -268,7 +327,7 @@ def showRGB(dirs, s2repr_dirs, titles=None, islice=None, jslice=None, draw_bbox=
                         ax.imshow(rgb)
                         if split_mask is not None:
                             ax.imshow(split_mask, alpha=0.2)
-                        if isinstance(color, list): kw = {"color": color[i]}
+                        if isinstance(color, list): kw = {"color": color[k]}
                         elif isinstance(color, str): kw = {"color": color}
                         else: kw={}
                         ax.add_patch(
@@ -405,6 +464,57 @@ def showPairedHistograms(matching_dirs, variable_index, variable_name, islice=No
     plt.tight_layout()
     if save_name is not None: savefigure(fig, save_name)
     plt.show()
+
+def showMeanDifferenceMaps(orig_path, gee_path, 
+                           variable_index, variable_name,
+                           islices, jslices,
+                           row_labels,
+                           normalize=False, 
+                           save_name=None,
+                           nrows=2, 
+                           figsize=(15,10)):
+    assert len(islices)==len(jslices)
+    assert len(islices)%nrows==0
+    gee_dir = Path(gee_path).parent
+    # Load data
+    with rasterio.open(orig_path) as f:
+        orig_mean = f.read(variable_index)
+    with rasterio.open(gee_path) as f:
+        gee_mean = f.read(variable_index)
+    # figure
+    fig, axs = plt.subplots(nrows=nrows, ncols=len(islices)//nrows, figsize=figsize)
+    axs = axs.flatten()
+    colors = ["r" for _ in range(len(islices)//nrows+1)]+\
+             ["orange" for _ in range(len(islices)//nrows+1)]
+    j = 0
+    for i, (ax, islice, jslice, color) in enumerate(
+        zip(axs.flatten(), islices, jslices, colors)
+    ):
+        O = orig_mean[islice,jslice].copy()
+        G = gee_mean[islice,jslice].copy()
+        if normalize:
+            # get stats
+            mx, mn = np.nanmax(O), np.nanmin(O)
+            # apply
+            O = norm2d(O, mn, mx)
+            G = norm2d(G, mn, mx)
+        rerror = G-O
+        sns.heatmap(
+            rerror,
+            cmap="bwr",
+            vmin=-1, 
+            vmax=1,
+            ax=ax
+        )
+        ax.set_xticks([])
+        ax.set_yticks([])
+    axs = axs.reshape(nrows, -1)
+    for i in range(nrows):
+        axs[i, 0].set_ylabel(row_labels[i])
+    fig.suptitle(f'{variable_name} ({datetime.strptime(Path(gee_dir).name.split("_")[1].split("T")[0], "%Y%m%d").strftime("%d.%m.%Y")})')
+    plt.tight_layout()
+    if save_name is not None: savefigure(fig, save_name)
+    plt.show()
     
 def showPredictionMaps(dirs, titles, variable_index, variable_name, s2repr_dirs, gt_dir, 
                         shapefile_paths, islice=None, jslice=None, normalize=False, save_name=None,
@@ -450,7 +560,7 @@ def showPredictionMaps(dirs, titles, variable_index, variable_name, s2repr_dirs,
             mean = norm2d(mean, gtmin, gtmax)
             variance = norm2d(variance, variancemin, variancemax)
         rerror = mean-gt
-        cerror = np.sqrt(rerror**2)-np.sqrt(variance)
+        cerror = np.abs(rerror)-np.sqrt(variance)
         axs[i,0].imshow(rgb)
         if i ==0: axs[i,0].set_title(f"RGB")
         sns.heatmap(gt, ax=axs[i,1], 
@@ -466,9 +576,9 @@ def showPredictionMaps(dirs, titles, variable_index, variable_name, s2repr_dirs,
         if i==0: axs[i,2].set_title(f"mean")
         sns.heatmap(variance, ax=axs[i,3], vmin=np.nanmin(variance), vmax=np.nanmax(variance))
         if i==0: axs[i,3].set_title(f"variance")
-        sns.heatmap(rerror, ax=axs[i,4], vmin=-1, vmax=1)
+        sns.heatmap(rerror, ax=axs[i,4], cmap="bwr", vmin=-1, vmax=1)
         if i==0: axs[i,4].set_title(f"r-error")
-        sns.heatmap(cerror, ax=axs[i,5], vmin=-1, vmax=1)
+        sns.heatmap(cerror, ax=axs[i,5], cmap="bwr", vmin=-1, vmax=1)
         if i==0: axs[i,5].set_title(f"c-error")
     for ax in axs.flatten(): 
         ax.set_xticks([])
@@ -584,7 +694,7 @@ def showErrorHistograms(dirs, titles, variable_index, variable_name,
     if save_name is not None: savefigure(fig, save_name)
     plt.show()
     
-def showOneImageVariableResults(dir_, title, variable_index, variable_name, s2repr_dirs, gt_dir, 
+def showSinglePredictionMaps(dir_, title, variable_index, variable_name, s2repr_dirs, gt_dir, 
                                 islice=None, jslice=None, normalize=False, save_name=None,
                                 figsize=(15,2.5)):
     fig, axs = plt.subplots(nrows=1, ncols=6, figsize=figsize)
@@ -626,28 +736,28 @@ def showOneImageVariableResults(dir_, title, variable_index, variable_name, s2re
         mean = norm2d(mean, gtmin, gtmax)
         variance = norm2d(variance, variancemin, variancemax)
     rerror = mean-gt
-    cerror = np.sqrt(rerror**2)-np.sqrt(variance)
+    cerror = np.abs(rerror)-np.sqrt(variance)
     axs[0].imshow(rgb)
-    axs[0].set_title(f"{title} - rgb")
+    axs[0].set_title(f"rgb")
     sns.heatmap(gt, ax=axs[1], 
         vmin=min(np.nanmin(mean), np.nanmean(gt)), 
         vmax=max(np.nanmax(mean), np.nanmax(gt))
     )
-    axs[1].set_title(f"{title} - gt")
+    axs[1].set_title(f"gt")
     # break
     sns.heatmap(mean, ax=axs[2], 
         vmin=min(np.nanmin(mean), np.nanmean(gt)), 
         vmax=max(np.nanmax(mean), np.nanmax(gt))
     )
-    axs[2].set_title(f"{title} - mean")
+    axs[2].set_title(f"mean")
     sns.heatmap(variance, ax=axs[3], vmin=np.nanmin(variance), vmax=np.nanmax(variance))
-    axs[3].set_title(f"{title} - variance")
-    sns.heatmap(rerror, ax=axs[4], vmin=-1, vmax=1)
-    axs[4].set_title(f"{title} - r-error")
-    sns.heatmap(cerror, ax=axs[5], vmin=-1, vmax=1)
-    axs[5].set_title(f"{title} - c-error")
+    axs[3].set_title(f"variance")
+    sns.heatmap(rerror, ax=axs[4], cmap="bwr", vmin=-1, vmax=1)
+    axs[4].set_title(f"r-error")
+    sns.heatmap(cerror, ax=axs[5], cmap="bwr", vmin=-1, vmax=1)
+    axs[5].set_title(f"c-error")
     for ax in axs.flatten(): ax.set_axis_off()
-    fig.suptitle(variable_name)
+    fig.suptitle(f"{variable_name} - {title}")
     plt.tight_layout()
     if save_name is not None: savefigure(fig, save_name)
     plt.show()
