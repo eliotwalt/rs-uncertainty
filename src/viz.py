@@ -8,11 +8,37 @@ import json
 import os
 import seaborn as sns
 import rasterio
+import fiona
+from datetime import datetime
 from pathlib import Path
 import numpy as np
 from .metrics import StratifiedRCU
 sns.set()
 sns.set_style("whitegrid")
+
+# Compute gt date
+def parse_gt_date(date_str) -> datetime: 
+    # there are 2 gt date formats
+    try: return datetime.strptime(date_str, "%Y-%m-%d")
+    except: return datetime.strptime(date_str, "%Y/%m/%d")
+
+def single_legend_figure(fig, ncol):
+    objects, labels = fig.axes[0].get_legend_handles_labels()
+    fig.legend(objects[:2], labels[:2], ncol=ncol, loc='upper center', bbox_to_anchor=(0.5, 0.))
+    return fig
+
+def compute_gt_date(project_id, shapefile_paths):
+    project_shape_collections = [fiona.open(p) for p in shapefile_paths]
+    polygon = None
+    for collection in project_shape_collections:
+        try:
+            polygon = [s['geometry'] for s in collection if s['properties']['kv_id'] == int(project_id)][0]
+            gt_date = [s["properties"]["PUB_DATO"] for s in collection if s['properties']['kv_id'] == int(project_id)][0]
+            gt_date = parse_gt_date(gt_date)
+            break
+        except IndexError: pass 
+    if polygon is None: raise ValueError(f"Could not find polygon and dates")
+    return gt_date
 
 class ExperimentVisualizer():
     def __init__(self, rcus, exp_var_name, exp_vars, variable_names, fig_ncols=2):
@@ -265,8 +291,8 @@ def showRGB(dirs, s2repr_dirs, titles=None, islice=None, jslice=None, draw_bbox=
     plt.show()
 
 def showPairedMaps(matching_dirs, variable_index, variable_name, islice=None, jslice=None, 
-                     normalize=False, save_name=None):
-    fig, axs = plt.subplots(nrows=len(matching_dirs), ncols=6, figsize=(20,15))
+                     normalize=False, save_name=None, figsize=(15,11)):
+    fig, axs = plt.subplots(nrows=len(matching_dirs), ncols=6, figsize=figsize)
     for i, (orig_dir, gee_dir) in enumerate(matching_dirs):
         pid = gee_dir.name.split("_")[0]
         # means
@@ -302,36 +328,39 @@ def showPairedMaps(matching_dirs, variable_index, variable_name, islice=None, js
             vmin=min(np.nanmin(gee_mean), np.nanmean(orig_mean)), 
             vmax=max(np.nanmax(gee_mean), np.nanmax(orig_mean))
         )
-        axs[i,0].set_title(f"{orig_dir.name}\norig_mean")
+        if i==0: axs[i,0].set_title(f"original mean")
         sns.heatmap(gee_mean, ax=axs[i,1], 
             vmin=min(np.nanmin(gee_mean), np.nanmean(orig_mean)), 
             vmax=max(np.nanmax(gee_mean), np.nanmax(orig_mean))
         )
-        axs[i,1].set_title(f"{orig_dir.name}\ngee_mean")
+        if i==0: axs[i,1].set_title(f"gee mean")
         sns.heatmap(meandiff, ax=axs[i,2], cmap="bwr", vmin=-1, vmax=1)
-        axs[i,2].set_title(f"{orig_dir.name}\ndiff_mean")
+        if i==0: axs[i,2].set_title(f"difference mean")
         sns.heatmap(orig_variance, ax=axs[i,3], 
             vmin=min(np.nanmin(gee_variance), np.nanmean(orig_variance)), 
             vmax=max(np.nanmax(gee_variance), np.nanmax(orig_variance))
         )
-        axs[i,3].set_title(f"{orig_dir.name}\norig_variance")
+        if i == 0: axs[i,3].set_title(f"original variance")
         sns.heatmap(gee_variance, ax=axs[i,4], 
             vmin=min(np.nanmin(gee_variance), np.nanmean(orig_variance)), 
             vmax=max(np.nanmax(gee_variance), np.nanmax(orig_variance))
         )
-        axs[i,4].set_title(f"{orig_dir.name}\ngee_variance")
+        if i == 0: axs[i,4].set_title(f"gee variance")
         sns.heatmap(variancediff, ax=axs[i,5], cmap="bwr", vmin=-1, vmax=1)
-        axs[i,5].set_title(f"{orig_dir.name}\ndiff_variance")
-    for ax in axs.flatten(): ax.set_axis_off()
-    axs[0,0]
+        if i == 0: axs[i,5].set_title(f"difference variance")
+    for ax in axs.flatten(): 
+        ax.set_xticks([])
+        ax.set_yticks([])
+    for i, (d, _) in enumerate(matching_dirs):
+        axs[i,0].set_ylabel(datetime.strptime(d.name.split("_")[1].split("T")[0], '%Y%m%d').strftime("%d.%m.%Y"))
     fig.suptitle(variable_name)
     plt.tight_layout()
     if save_name is not None: savefigure(fig, save_name)
     plt.show()
     
-def showVariableHistograms(matching_dirs, variable_index, variable_name, islice=None, jslice=None, 
-                           log_mean=False, log_variance=False, save_name=None):
-    fig, axs = plt.subplots(nrows=len(matching_dirs), ncols=2, figsize=(10, 15))
+def showPairedHistograms(matching_dirs, variable_index, variable_name, islice=None, jslice=None, 
+                           log_mean=False, log_variance=False, save_name=None, figsize=(10, 15)):
+    fig, axs = plt.subplots(nrows=len(matching_dirs), ncols=2, figsize=figsize)
     for i, (orig_dir, gee_dir) in enumerate(matching_dirs):
         pid = gee_dir.name.split("_")[0]
         # means
@@ -352,30 +381,35 @@ def showVariableHistograms(matching_dirs, variable_index, variable_name, islice=
             orig_variance = f.read(variable_index)
             if islice is not None and jslice is not None: orig_variance = orig_variance[islice, jslice]
             orig_variance = orig_variance.flatten()
-        km = "mean" if not log_mean else "log_mean"
+        km = "mean" if not log_mean else "log mean"
         mdf = pd.DataFrame({
             "source": ["original" for _ in orig_mean]+["gee" for _ in gee_mean],
             km: orig_mean.tolist()+gee_mean.tolist()
         })
-        kv = "variance" if not log_variance else "log_variance"
+        kv = "variance" if not log_variance else "log variance"
         vdf = pd.DataFrame({
             "source": ["original" for _ in orig_variance]+["gee" for _ in gee_variance],
             kv: orig_variance.tolist()+gee_variance.tolist()
         })
         sns.histplot(data=mdf, x=km, hue="source", ax=axs[i,0])
-        axs[i,0].set_title(f"{orig_dir.name}")
+        axs[i,0].set_title(datetime.strptime(orig_dir.name.split("_")[1].split("T")[0], '%Y%m%d').strftime("%d.%m.%Y"))
         if log_mean: axs[i,0].set_xscale("log")
         sns.histplot(data=vdf, x=kv, hue="source", ax=axs[i,1])
-        axs[i,1].set_title(f"{orig_dir.name}")
+        axs[i,1].set_title(datetime.strptime(orig_dir.name.split("_")[1].split("T")[0], '%Y%m%d').strftime("%d.%m.%Y"))
+        axs[i,1].set_ylabel("")
         if log_variance: axs[i,1].set_xscale("log")
+        axs[i,0].get_legend().remove()
+        axs[i,1].get_legend().remove()
     fig.suptitle(variable_name)
+    fig.legend([axs[0,0], axs[0,1]], labels=["original", "gee"], ncol=2, loc='upper center', bbox_to_anchor=(0.5, 0.))
     plt.tight_layout()
     if save_name is not None: savefigure(fig, save_name)
     plt.show()
     
 def showPredictionMaps(dirs, titles, variable_index, variable_name, s2repr_dirs, gt_dir, 
-                        islice=None, jslice=None, normalize=False, save_name=None):
-    fig, axs = plt.subplots(nrows=len(titles), ncols=6, figsize=(20,12))
+                        shapefile_paths, islice=None, jslice=None, normalize=False, save_name=None,
+                        figsize=(15,10)):
+    fig, axs = plt.subplots(nrows=len(titles), ncols=6, figsize=figsize)
     for i, d in enumerate(dirs):
         dir_name = d.split("/")[-1]
         pid = dir_name.split("_")[0]
@@ -383,6 +417,7 @@ def showPredictionMaps(dirs, titles, variable_index, variable_name, s2repr_dirs,
         mean_path = Path(os.path.join(d, f"{pid}_mean.tif"))
         variance_path = Path(os.path.join(d, f"{pid}_variance.tif"))
         gt_path = os.path.join(gt_dir, f"{pid}.tif")
+        gt_date = compute_gt_date(pid, shapefile_paths)
         with rasterio.open(img_path) as f:
             rgb = f.read([4,3,2])
             rgb = clip(rgb, (100, 2000))
@@ -393,6 +428,7 @@ def showPredictionMaps(dirs, titles, variable_index, variable_name, s2repr_dirs,
             gt = f.read(variable_index)
             gt_mask = f.read_masks(1)//255
             gt[gt_mask==0]=np.nan
+            if variable_index in [3,5]: gt /= 100 # Cover/Dens normalization!!
             if islice is not None: gt = gt[islice]
             if jslice is not None: gt = gt[:,jslice]
         with rasterio.open(mean_path) as f:
@@ -416,33 +452,142 @@ def showPredictionMaps(dirs, titles, variable_index, variable_name, s2repr_dirs,
         rerror = mean-gt
         cerror = np.sqrt(rerror**2)-np.sqrt(variance)
         axs[i,0].imshow(rgb)
-        axs[i,0].set_title(f"{titles[i]} - rgb")
+        if i ==0: axs[i,0].set_title(f"RGB")
         sns.heatmap(gt, ax=axs[i,1], 
             vmin=min(np.nanmin(mean), np.nanmean(gt)), 
             vmax=max(np.nanmax(mean), np.nanmax(gt))
         )
-        axs[i,1].set_title(f"{titles[i]} - gt")
+        if i==0: axs[i,1].set_title(f"gt ({gt_date.strftime('%d.%m.%Y')})")
         # break
         sns.heatmap(mean, ax=axs[i,2], 
             vmin=min(np.nanmin(mean), np.nanmean(gt)), 
             vmax=max(np.nanmax(mean), np.nanmax(gt))
         )
-        axs[i,2].set_title(f"{titles[i]} - mean")
+        if i==0: axs[i,2].set_title(f"mean")
         sns.heatmap(variance, ax=axs[i,3], vmin=np.nanmin(variance), vmax=np.nanmax(variance))
-        axs[i,3].set_title(f"{titles[i]} - variance")
+        if i==0: axs[i,3].set_title(f"variance")
         sns.heatmap(rerror, ax=axs[i,4], vmin=-1, vmax=1)
-        axs[i,4].set_title(f"{titles[i]} - r-error")
+        if i==0: axs[i,4].set_title(f"r-error")
         sns.heatmap(cerror, ax=axs[i,5], vmin=-1, vmax=1)
-        axs[i,5].set_title(f"{titles[i]} - c-error")
-    for ax in axs.flatten(): ax.set_axis_off()
+        if i==0: axs[i,5].set_title(f"c-error")
+    for ax in axs.flatten(): 
+        ax.set_xticks([])
+        ax.set_yticks([])
+    for i, d, in enumerate(dirs):
+        axs[i,0].set_ylabel(f'{titles[i]} ({datetime.strptime(Path(d).name.split("_")[1].split("T")[0], "%Y%m%d").strftime("%d.%m.%Y")})')
+    fig.suptitle(variable_name)
+    plt.tight_layout()
+    if save_name is not None: savefigure(fig, save_name)
+    plt.show()
+
+def showPredictionHistograms(dirs, titles, variable_index, variable_name,
+                           gt_dir, shapefile_paths, log_mean=False, log_variance=False,
+                           islice=None, jslice=None,
+                           save_name=None, figsize=(10, 15)):
+    fig, axs = plt.subplots(nrows=len(titles), ncols=2, figsize=figsize)
+    for i, d in enumerate(dirs):
+        dir_name = d.split("/")[-1]
+        pid = dir_name.split("_")[0]
+        mean_path = Path(os.path.join(d, f"{pid}_mean.tif"))
+        variance_path = Path(os.path.join(d, f"{pid}_variance.tif"))
+        gt_path = os.path.join(gt_dir, f"{pid}.tif")
+        gt_date = compute_gt_date(pid, shapefile_paths)
+        with rasterio.open(gt_path) as f:
+            gt = f.read(variable_index)
+            gt_mask = f.read_masks(1)//255
+            gt[gt_mask==0]=np.nan
+            if variable_index in [3,5]: gt /= 100 # Cover/Dens normalization!!
+            if islice is not None: gt = gt[islice]
+            if jslice is not None: gt = gt[:,jslice]
+        with rasterio.open(mean_path) as f:
+            mean = f.read(variable_index)
+            if islice is not None: mean = mean[islice]
+            if jslice is not None: mean = mean[:,jslice]
+        with rasterio.open(variance_path) as f:
+            variance = f.read(variable_index)
+            if islice is not None: variance = variance[islice]
+            if jslice is not None: variance = variance[:,jslice]
+        km = "mean" if not log_mean else "log mean"
+        mdf = pd.DataFrame({
+            "source": [f"gt ({gt_date.strftime('%d.%m.%Y')})" for _ in gt.flatten()]+
+                      [f'prediction ({datetime.strptime(Path(d).name.split("_")[1].split("T")[0], "%Y%m%d").strftime("%d.%m.%Y")})' for _ in mean.flatten()],
+            km: gt.flatten().tolist()+mean.flatten().tolist()
+        })
+        kv = "variance" if not log_variance else "log variance"
+        vdf = pd.DataFrame({
+            "source": ["prediction" for _ in variance.flatten()],
+            kv: variance.flatten().tolist()
+        })
+        axs[i,0] = sns.histplot(data=mdf, x=km, hue="source", ax=axs[i,0])
+        sns.move_legend(axs[i,0], "upper center", ncol=2, title="", fontsize="small", bbox_to_anchor=(0.5,1.15))
+        if log_mean: axs[i,0].set_xscale("log")
+        sns.histplot(data=vdf, x=kv, ax=axs[i,1])
+        # axs[i,1].set_title(titles[i])
+        axs[i,1].set_ylabel("")
+        if log_variance: axs[i,1].set_xscale("log")
+    for i, d, in enumerate(dirs):
+        axs[i,0].set_ylabel(f'{titles[i]}\nCount')
+    fig.suptitle(variable_name)
+    plt.tight_layout()
+    if save_name is not None: savefigure(fig, save_name)
+    plt.show()
+
+def showErrorHistograms(dirs, titles, variable_index, variable_name,
+                           gt_dir, log_rerror=False, log_cerror=False, 
+                           islice=None, jslice=None,
+                           save_name=None, figsize=(10,15)):
+    fig, axs = plt.subplots(nrows=len(titles), ncols=2, figsize=figsize)
+    for i, d in enumerate(dirs):
+        dir_name = d.split("/")[-1]
+        pid = dir_name.split("_")[0]
+        mean_path = Path(os.path.join(d, f"{pid}_mean.tif"))
+        variance_path = Path(os.path.join(d, f"{pid}_variance.tif"))
+        gt_path = os.path.join(gt_dir, f"{pid}.tif")
+        with rasterio.open(gt_path) as f:
+            gt = f.read(variable_index)
+            gt_mask = f.read_masks(1)//255
+            gt[gt_mask==0]=np.nan
+            if variable_index in [3,5]: gt /= 100 # Cover/Dens normalization!!
+            if islice is not None: gt = gt[islice]
+            if jslice is not None: gt = gt[:,jslice]
+        with rasterio.open(mean_path) as f:
+            mean = f.read(variable_index)
+            if islice is not None: mean = mean[islice]
+            if jslice is not None: mean = mean[:,jslice]
+        with rasterio.open(variance_path) as f:
+            variance = f.read(variable_index)
+            if islice is not None: variance = variance[islice]
+            if jslice is not None: variance = variance[:,jslice]
+        rerror = mean-gt
+        cerror = np.sqrt(rerror**2)-np.sqrt(variance)
+        rk = "r-error" if not log_rerror else "log r-error"
+        rdf = pd.DataFrame({
+            "source": ["prediction" for _ in rerror.flatten()],
+            rk: rerror.flatten().tolist()
+        })
+        ck = "c-error" if not log_cerror else "log c-error"
+        cdf = pd.DataFrame({
+            "source": ["prediction" for _ in cerror.flatten()],
+            ck: cerror.flatten().tolist()
+        })
+        sns.histplot(data=rdf, x=rk, ax=axs[i,0])
+        # axs[i,0].set_title(titles[i])
+        if log_rerror: axs[i,0].set_xscale("log")
+        sns.histplot(data=cdf, x=ck, ax=axs[i,1])
+        # axs[i,1].set_title(titles[i])
+        axs[i,1].set_ylabel("")
+        if log_cerror: axs[i,1].set_xscale("log")
+    for i, d, in enumerate(dirs):
+        axs[i,0].set_ylabel(f'{titles[i]}\nCount')
     fig.suptitle(variable_name)
     plt.tight_layout()
     if save_name is not None: savefigure(fig, save_name)
     plt.show()
     
 def showOneImageVariableResults(dir_, title, variable_index, variable_name, s2repr_dirs, gt_dir, 
-                                islice=None, jslice=None, normalize=False, save_name=None):
-    fig, axs = plt.subplots(nrows=1, ncols=6, figsize=(20,3))
+                                islice=None, jslice=None, normalize=False, save_name=None,
+                                figsize=(15,2.5)):
+    fig, axs = plt.subplots(nrows=1, ncols=6, figsize=figsize)
     dir_name = dir_.split("/")[-1]
     pid = dir_name.split("_")[0]
     img_path = list(Path(os.path.join(s2repr_dirs, dir_name, pid)).glob("*.tif"))[0]
@@ -459,6 +604,7 @@ def showOneImageVariableResults(dir_, title, variable_index, variable_name, s2re
         gt = f.read(variable_index)
         gt_mask = f.read_masks(1)//255
         gt[gt_mask==0]=np.nan
+        if variable_index in [3,5]: gt /= 100 # Cover/Dens normalization!!
         if islice is not None: gt = gt[islice]
         if jslice is not None: gt = gt[:,jslice]
     with rasterio.open(mean_path) as f:
@@ -575,6 +721,8 @@ def evaluateSplit(prediction_dir, gt_dir, split_mask, split):
     with rasterio.open(os.path.join(gt_dir, f"{project}.tif")) as f:
         gt = f.read(f.indexes)
         gt[:,split_mask!=split_id] = np.nan
+        gt[2] /= 100 # Cover/Dens normalization!!
+        gt[4] /= 100
     rcu = StratifiedRCU(
         num_variables=variance.shape[0],
         num_groups=1,
@@ -628,32 +776,30 @@ def loadMetricsDataFrame(matching_dirs, metrics=["mse", "ence", "auce", "cv"],
     fulldf = pd.DataFrame(data)
     return fulldf
 
-def plotTrainTestMetricsDataFrames(train_df, test_df, save_name=None):
+def plotTrainTestMetricsDataFrames(train_df, test_df, type="bar", save_name=None, figsize=(15,10)):
+    assert type in ["bar", "scatter"]
     metrics_df = pd.concat([train_df, test_df])
     fig, axs = plt.subplots(
         nrows=len(metrics_df.metric.unique()),
         ncols=len(metrics_df.variable.unique()),
-        figsize=(15, 13)
+        figsize=figsize
     )
-    def row2idx(x, anchors):
-        anchor = anchors[0] if x["split"]=="train" else anchors[1]
-        offset = 0.5 if x["source"] == "gee" else -0.5
-        return anchor+offset 
-    a = [0.5, 2.5]
     for i, m in enumerate(metrics_df.metric.unique()):
         for j, v in enumerate(metrics_df.variable.unique()):
             tmp = (metrics_df
                    .query(f"metric == '{m}' & variable == '{v}'")
                    .drop(columns=["metric", "variable", "imageId"]))
-            tmp = tmp.assign(source_=tmp.apply(row2idx, axis=1, anchors=a).values)
             mtmp = (tmp
                .groupby(by=["source", "split"])
                .mean()
                .reset_index())
-            sns.scatterplot(data=tmp, x="source_", y="x", hue="source", ax=axs[i,j], alpha=0.3, s=50)
-            sns.scatterplot(data=mtmp, x="source_", y="x", hue="source", ax=axs[i,j], s=100)
-            axs[i,j].set_xticks(ticks=[a[0]-0.5,a[0],a[0]+0.5,a[1]-0.5,a[1],a[1]+0.5], 
-                                labels=["original", "\ntrain", "gee", "original", "\ntest","gee"])
+            if type == "scatter":
+                sns.scatterplot(data=tmp, x="split", y="x", hue="source", ax=axs[i,j], marker="o", s=20, alpha=0.4)
+                sns.scatterplot(data=mtmp, x="split", y="x", hue="source", ax=axs[i,j], marker="_", s=100, linewidth=2)
+                axs[i,j].set(xlim=(-0.5, 1.5))
+            else:
+                sns.barplot(data=tmp, x="split", y="x", hue="source", ax=axs[i,j], 
+                            hue_order=["original", "gee"], errorbar=None)
             axs[i,j].get_legend().remove()
             axs[i,j].set_xlabel("")
             axs[i,j].set_ylabel("")
@@ -662,5 +808,6 @@ def plotTrainTestMetricsDataFrames(train_df, test_df, save_name=None):
             if j==0:
                 axs[i,j].set_ylabel(m)
     plt.tight_layout()
+    fig = single_legend_figure(fig, 2)
     if save_name is not None: savefigure(fig, save_name)
     plt.show()
