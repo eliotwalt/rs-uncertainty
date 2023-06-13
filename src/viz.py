@@ -2,6 +2,8 @@ import wandb
 import pandas as pd
 import matplotlib.pyplot as plt 
 import matplotlib.patches as patches
+from matplotlib.ticker import MaxNLocator
+from matplotlib.colors import LogNorm
 import tempfile
 import math
 import json
@@ -250,6 +252,38 @@ def savefigure(fig, name):
     Path(name).parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(name+".png", dpi=300)
     fig.savefig(name+".pdf", dpi=200)
+
+def get_nonzero_avg_cp_visualizer(result_dirs, s2repr_dirs, variable_names, max_n, bins):
+    exp_vars = []
+    nnz_result_dirs = []
+    for result_dir in result_dirs:
+        dir_name = result_dir.split("/")[-1]
+        project_id = dir_name.split("_")[0]
+        img_path = list(Path(os.path.join(s2repr_dirs, dir_name, project_id)).glob("*.tif"))[0]
+        with rasterio.open(img_path) as f:
+            mean = f.read(f.count).astype("float").mean()
+            if mean != 0.:
+                exp_vars.append(mean)
+                nnz_result_dirs.append(result_dir)
+    bin_ids = np.digitize(exp_vars, bins=bins)-1
+    selected_exp_vars, selected_nnz_result_dirs = [], []
+    for bin_id in np.unique(bin_ids):
+        bin_exp_vars = [exp_vars[i] for i in range(len(exp_vars)) if bin_ids[i]==bin_id]
+        bin_nnz_result_dirs = [nnz_result_dirs[i] for i in range(len(nnz_result_dirs)) if bin_ids[i]==bin_id]
+        assert len(bin_exp_vars)==len(bin_nnz_result_dirs)
+        print(f"bin {bin_id}: {len(bin_exp_vars)} results")
+        selected_exp_vars.extend(bin_exp_vars[:max_n//(len(bins)-1)])
+        selected_nnz_result_dirs.extend(bin_nnz_result_dirs[:max_n//(len(bins)-1)])
+    print(f"selected {len(selected_exp_vars)} results.")
+    # Create visualizer object
+    visualizer = ExperimentVisualizer.from_paths(
+        selected_nnz_result_dirs,
+        "average cloud probability",
+        selected_exp_vars, 
+        variable_names,
+        fig_ncols=2
+    )
+    return visualizer, selected_nnz_result_dirs, selected_exp_vars
 
 def showSplit(gt_path, split_mask, islices, jslices, 
               patch_colors=["r", "b"], save_name=None):
@@ -921,3 +955,485 @@ def plotTrainTestMetricsDataFrames(train_df, test_df, type="bar", save_name=None
     fig = single_legend_figure(fig, 2)
     if save_name is not None: savefigure(fig, save_name)
     plt.show()
+
+def getUsabilityData(
+    dirs,
+    s2repr_dirs,
+    gt_dir,
+    num_variables,
+    variance_bounds=None, # used to discard distribution tail
+    islice=None,
+    jslice=None
+):
+    """
+    returns
+        variances
+        cloud_probabilities
+        rerrors
+        cerrors
+    """
+    cps, variances, rerrors, cerrors = tuple([[] for _ in range(num_variables)] for _ in range(4))
+    for dir_ in dirs:
+        # paths
+        dir_name = dir_.split("/")[-1]
+        pid = dir_name.split("_")[0]
+        gt_path = Path(os.path.join(gt_dir, f"{pid}.tif"))
+        variance_path = Path(os.path.join(dir_, f"{pid}_variance.tif"))
+        mean_path = Path(os.path.join(dir_, f"{pid}_mean.tif"))
+        img_path = list(Path(os.path.join(s2repr_dirs, dir_name, pid)).glob("*.tif"))[0]
+        # read data
+        with rasterio.open(gt_path) as f:
+            gt = f.read(f.indexes).astype("float")
+            gt_mask = f.read_masks(1)//255
+            gt[2] /= 100
+            gt[4] /= 100
+            if islice is not None: gt = gt[:,islice]
+            if jslice is not None: gt = gt[:,:,jslice]
+        with rasterio.open(img_path) as f:
+            cp = f.read(f.count).astype("float")
+            if islice is not None: cp = cp[islice]
+            if jslice is not None: cp = cp[:,jslice]
+        with rasterio.open(variance_path) as f:
+            variance = f.read(f.indexes).astype("float")
+            if islice is not None: variance = variance[:,islice]
+            if jslice is not None: variance = variance[:,:,jslice]
+        with rasterio.open(mean_path) as f:
+            mean = f.read(f.indexes).astype("float")   
+            if islice is not None: mean = mean[:,islice]
+            if jslice is not None: mean = mean[:,:,jslice]
+        del gt_mask
+        # compute valid mask
+        cps_list, variances_list, rerrors_list, cerrors_list = [], [], [], []
+        for i in range(mean.shape[0]):
+            # compute valid mask
+            valid = ~np.isnan(cp)
+            variancei = variance[i]
+            if variance_bounds is not None:
+                variance_bounds[i] = [float(vb) for vb in variance_bounds[i]]
+                variancei[variancei<variance_bounds[i][0]] = np.nan
+                variancei[variancei>variance_bounds[i][1]] = np.nan
+            for x in [gt[i], mean[i], variance[i]]: 
+                valid = np.bitwise_and(valid, ~np.isnan(x))
+            # mask by variable
+            cpi = cp[valid]
+            gti = gt[i,valid]
+            meani = mean[i,valid]
+            variancei = variancei[valid]
+            gti = gt[i,valid]
+            rerrori = np.abs(meani-gti)
+            cerrori = np.abs(np.sqrt(rerrori**2)-np.sqrt(variancei))
+            # add to acc
+            cps[i].extend(cpi)
+            variances[i].extend(variancei)
+            rerrors[i].extend(rerrori)
+            cerrors[i].extend(cerrori)
+    cps = [np.array(x) for x in cps]
+    variances = [np.array(x) for x in variances]
+    rerrors = [np.array(x) for x in rerrors]
+    cerrors = [np.array(x) for x in cerrors]
+    return cps, variances, rerrors, cerrors
+
+def showMetricsCloudRepartition(
+    cps,
+    rerrors,
+    cerrors,
+    variable_names,
+    cloud_probability_bins=[0, 1, 20, 99],
+    figsize=(20,17),
+    save_name=None
+):
+    bins = cloud_probability_bins
+    fig, axs = plt.subplots(nrows=len(variable_names), ncols=2, figsize=figsize)
+    for i, variable_name in enumerate(variable_names):
+        cp = cps[i]
+        rerror = rerrors[i]
+        cerror = cerrors[i]
+        str_bins = [f"[{bins[i]}, {bins[i+1]})" for i in range(len(bins)-1)]+[f"[{bins[-1]}, 100]"]
+        # compute bin assignments
+        bin_ids = np.digitize(cp, bins=np.array(bins))-1
+        binned_cp = np.array([str_bins[i] for i in bin_ids])
+        # count bin
+        bin_counts = [(bin_ids==bin_id).sum() for bin_id in np.unique(bin_ids)]
+        # sample bins of equal size
+        sample_size = min(bin_counts)
+        # dataframe
+        df = pd.DataFrame({
+            "rerror": rerror,
+            "cerror": cerror,
+            "cloud probability": binned_cp,
+        })
+        # plot
+        sns.histplot(
+            data=df, 
+            x="rerror",
+            hue="cloud probability",
+            multiple="fill",
+            bins=8,
+            stat="density",
+            hue_order=str_bins,
+            common_norm=True,
+            ax=axs[i,0]
+        )
+        axs[i,0].set_xlabel(f"{variable_name} regression error")
+        axs[i,0].set_ylabel("Density")
+        sns.histplot(
+            data=df, 
+            x="cerror",
+            hue="cloud probability",
+            multiple="fill",
+            bins=8,
+            stat="density",
+            hue_order=str_bins,
+            common_norm=True,
+            ax=axs[i,1]
+        )
+        axs[i,1].set_xlabel(f"{variable_name} calibration error")
+        axs[i,1].set_ylabel("")
+    fig.tight_layout()
+    if save_name is not None: savefigure(fig, save_name)
+    plt.show()
+    
+def showVarianceCloudRepartition(
+    cps,
+    variances,
+    variable_names,
+    cloud_probability_bins=[0, 1, 20, 99],
+    figsize=(12,17),
+    save_name=None
+):
+    bins = cloud_probability_bins
+    fig, axs = plt.subplots(nrows=len(variable_names), ncols=1, figsize=figsize)
+    for i, variable_name in enumerate(variable_names):
+        cp = cps[i]
+        variance = variances[i]
+        str_bins = [f"[{bins[i]}, {bins[i+1]})" for i in range(len(bins)-1)]+[f"[{bins[-1]}, 100]"]
+        # compute bin assignments
+        bin_ids = np.digitize(cp, bins=np.array(bins))-1
+        binned_cp = np.array([str_bins[i] for i in bin_ids])
+        # count bin
+        bin_counts = [(bin_ids==bin_id).sum() for bin_id in np.unique(bin_ids)]
+        # create equal bins
+        sample_size = min(bin_counts)
+        # dataframe
+        df = pd.DataFrame({
+            "variance": variance,
+            "cloud probability": binned_cp,
+        })
+        # plot
+        sns.histplot(
+            data=df, 
+            x="variance",
+            hue="cloud probability",
+            multiple="fill",
+            bins=8,
+            stat="density",
+            hue_order=str_bins,
+            common_norm=True,
+            ax=axs[i]
+        )
+        axs[i].set_xlabel(f"{variable_name} variance")
+        axs[i].set_ylabel("Density")
+    fig.tight_layout()
+    if save_name is not None: savefigure(fig, save_name)
+    plt.show()
+
+def getCloudlessVisualizer(
+    dirs,
+    gt_dir, 
+    s2repr_dirs,
+    cloudy_pixel_threshold,
+    cloudy_exp_vars,
+    exp_var_name,
+    variable_names
+):
+    rcus = []
+    for dir_ in dirs:
+        # paths
+        dir_name = dir_.split("/")[-1]
+        pid = dir_name.split("_")[0]
+        gt_path = Path(os.path.join(gt_dir, f"{pid}.tif"))
+        variance_path = Path(os.path.join(dir_, f"{pid}_variance.tif"))
+        mean_path = Path(os.path.join(dir_, f"{pid}_mean.tif"))
+        img_path = list(Path(os.path.join(s2repr_dirs, dir_name, pid)).glob("*.tif"))[0]
+        # read data
+        with rasterio.open(gt_path) as f:
+            gt = f.read(f.indexes).astype("float")
+            gt[2] /= 100
+            gt[4] /= 100
+        with rasterio.open(img_path) as f:
+            cp = f.read(f.count).astype("float")
+        with rasterio.open(variance_path) as f:
+            variance = f.read(f.indexes).astype("float")
+        with rasterio.open(mean_path) as f:
+            mean = f.read(f.indexes).astype("float")   
+        # Mask out clouds according to threshold
+        cmask = cp>cloudy_pixel_threshold
+        gt[:,cmask] = np.nan
+        mean[:,cmask] = np.nan
+        variance[:,cmask] = np.nan
+        # create single img rcu
+        rcu = StratifiedRCU(
+            num_variables=variance.shape[0],
+            num_groups=1,
+            num_bins=1500,
+            lo_variance=np.nanmin(variance, axis=(1,2)),
+            hi_variance=np.nanmax(variance, axis=(1,2)),
+        )
+        rcu.add_project(pid, gt, mean, variance)
+        rcu.get_results_df(groups={}, variable_names=variable_names)
+        rcus.append(rcu)
+    visualizer = ExperimentVisualizer(
+        rcus=rcus,
+        exp_var_name=exp_var_name,
+        exp_vars=cloudy_exp_vars,
+        variable_names=variable_names,
+        fig_ncols=2
+    )
+    return visualizer
+
+def showCloudyCloudlessMetrics(
+    cloudy_visualizer, 
+    cloudless_visualizer,
+    bins, 
+    metrics, 
+    kind="agg",
+    figsize=(12,18),
+    ncols=2,
+    save_name=None
+):
+    assert cloudy_visualizer.exp_var_name==cloudless_visualizer.exp_var_name
+    assert cloudy_visualizer.exp_vars==cloudless_visualizer.exp_vars
+    assert cloudy_visualizer.variable_names==cloudless_visualizer.variable_names
+    bin_strings = [f"{bins[i]}-{bins[i+1]}" for i in range(len(bins)-1)]
+    num_variables = len(cloudy_visualizer.variable_names)
+    nrows = 1 if ncols>=num_variables else math.ceil(num_variables/ncols)
+    for metric in metrics:
+        # create figure
+        fig, axs = plt.subplots(nrows=nrows, ncols=ncols, figsize=figsize)
+        axs = axs.flatten()
+        # variables loop
+        for i, var in enumerate(cloudy_visualizer.variable_names):
+            ## REPLACE: self.variable_metric_boxplot(metric, var, kind, exp_var_bins, axs[i], fig_ncols)
+            query = " & ".join([
+                f"kind == '{kind.strip()}'",
+                f"metric == '{metric.strip()}'",
+                f"variable == '{var.strip()}'",
+                "group == 'global'"
+            ])
+            cloudy_df = (cloudy_visualizer.df.copy()
+                         .query(query)
+                         .drop(["kind", "metric", "variable", "group"], axis=1)
+                         .assign(group=lambda x: "cloudy"))
+            cloudless_df = (cloudless_visualizer.df.copy()
+                         .query(query)
+                         .drop(["kind", "metric", "variable", "group"], axis=1)
+                         .assign(group=lambda x: "cloudless"))
+            df = pd.concat([cloudy_df, cloudless_df])
+            df = df[df[cloudy_visualizer.exp_var_name]<=np.max(bins)]
+            bin_ids = np.digitize(
+                df[cloudy_visualizer.exp_var_name].values, 
+                bins=bins
+            )
+            bin_ids = bin_ids[bin_ids-1<len(bin_strings)]
+            df.loc[:,cloudy_visualizer.exp_var_name] = [
+                bin_strings[i-1] 
+                for i in bin_ids
+            ]
+            sns.boxplot(
+                data=df, y="x", x=cloudy_visualizer.exp_var_name, 
+                ax=axs[i], hue="group", 
+                order=bin_strings, 
+                hue_order=["cloudless", "cloudy"],
+                showfliers=False
+            )
+            ## 
+            axs[i].set_title(var)
+            axs[i].set_ylabel("")
+        fig.suptitle(metric)
+        if num_variables%ncols!=0: fig.delaxes(axs.flatten()[-1])
+        if save_name is not None: 
+            fig.tight_layout()
+            savefigure(fig, save_name+f"_{metric}")
+        plt.show()
+
+def cloudyCloudlessMetrics(
+    cloudy_visualizer, 
+    cloudless_visualizer,
+    bins, 
+    metrics, 
+    kind="agg",
+    save_name_suffix=None
+):
+    # default bins: np.array([0, 2, 15, 50, 100])
+    if save_name_suffix is not None:
+        save_name = f"images/cloud_experiment/cloudy_cloudless_{save_name_suffix}"
+    else: save_name = f"images/cloud_experiment/cloudy_cloudless"
+    showCloudyCloudlessMetrics(
+        cloudy_visualizer, 
+        cloudless_visualizer,
+        bins=bins, 
+        metrics=metrics, 
+        kind=kind,
+        figsize=(12,18),
+        ncols=2,
+        save_name=save_name
+    )
+
+# def histogram2dplot(
+#     xarray_generator,
+#     yarray_generator,
+#     xbins,
+#     ybins,
+#     log_counts=False,
+#     **hm_kwargs
+# ):
+#     H = None
+#     xbounds = (np.inf, -np.inf)
+#     ybounds = (np.inf, -np.inf)
+#     # Compute histogram from generator
+#     for xarray, yarray in zip(xarray_generator, yarray_generator):
+#         # remove nan
+#         valid = np.bitwise_and(~np.isnan(xarray), ~np.isnan(yarray))
+#         xarray, yarray = xarray[valid].astype(int), yarray[valid].astype(int)
+#         # compute histogram
+#         h, xbnds, ybnds = np.histogram2d(x=xarray, y=yarray, bins=[xbins, ybins])
+#         h = h[::-1,:]
+#         if H is None: H = h
+#         else: H += h
+#         xbounds = min(xbounds[0], xbnds[0]), max(xbounds[1], xbnds[-1])
+#         ybounds = min(ybounds[0], ybnds[0]), max(ybounds[1], ybnds[-1])
+#     # ticks
+#     xticks = [0, len(xbins)-1]
+#     yticks = [0, len(ybins)-1]
+#     print(xticks, yticks)
+#     xticks_labels = [int(xbounds[0]), int(xbounds[1]-1)]
+#     yticks_labels = [int(ybounds[1]-1), int(ybounds[0])]
+#     if log_counts: 
+#         # hm_kwargs["norm"] = LogNorm
+#         mx = H.max()
+#         H = np.log(H+1)
+#         cbar_kws={"ticks": [0, mx], "format": "%.e"}
+#     else: cbar_kws = {}
+#     ax = hm_kwargs.get("ax", plt.gca())
+#     sns.heatmap(H, cbar_kws=cbar_kws, **hm_kwargs)
+#     ax.set_xticks(xticks, [math.floor(xbins.min()), xbins.max()])
+#     ax.set_yticks(yticks, [ybins.max(), math.floor(ybins.min())])
+#     return ax
+
+# def varianceGenerator(dirs, index, bounds):
+#     for dir_ in dirs:
+#         dir_name = dir_.split("/")[-1]
+#         pid = dir_name.split("_")[0]
+#         variance_path = Path(os.path.join(dir_, f"{pid}_variance.tif"))
+#         f = rasterio.open(variance_path)
+#         v = f.read(index).astype("float")
+#         f.close()
+#         v[v<bounds[0]] = np.nan
+#         v[v>bounds[1]] = np.nan
+#         yield v
+
+# def cpGenerator(dirs, s2repr_dirs, bounds):
+#     for dir_ in dirs:
+#         dir_name = dir_.split("/")[-1]
+#         pid = dir_name.split("_")[0]
+#         img_path = list(Path(os.path.join(s2repr_dirs, dir_name, pid)).glob("*.tif"))[0]
+#         f = rasterio.open(img_path)
+#         cp = f.read(f.count).astype("float")
+#         f.close()
+#         cp[cp<bounds[0]] = np.nan
+#         cp[cp>bounds[1]] = np.nan
+#         yield cp
+
+# def showVarianceCloudMap(
+#     dirs,
+#     s2repr_dirs,
+#     variable_index,
+#     variable_name,
+#     nbins_variance,
+#     nbins_cloud_probability,
+#     variance_bounds=None,
+#     cloud_probability_bounds=[0,100],
+#     save_name=None,
+#     figsize=(8,8),
+#     log_counts=False,
+#     magnification=None,
+# ):
+#     # Compute variance bounds if required
+#     if variance_bounds is None:
+#         hi, lo = -np.inf, np.inf
+#         for dir_ in dirs:
+#             dir_name = dir_.split("/")[-1]
+#             pid = dir_name.split("_")[0]
+#             variance_path = Path(os.path.join(dir_, f"{pid}_variance.tif"))
+#             img_path = list(Path(os.path.join(s2repr_dirs, dir_name, pid)).glob("*.tif"))[0]
+#             with rasterio.open(img_path) as f: valid = ~np.isnan(f.read(f.count))
+#             with rasterio.open(variance_path) as f: variance = f.read(variable_index).astype("float")
+#             valid = np.bitwise_and(valid, ~np.isnan(variance))
+#             variance = variance[valid]
+#             hi = max(np.nanmax(variance), hi)
+#             lo = min(np.nanmin(variance), lo)
+#         variance_bounds = [lo, hi]
+#     assert len(variance_bounds)==2, "must provide variance bounds as min/max"
+#     # CP bounds
+#     assert len(cloud_probability_bounds)==2, "must provide cloud probability bounds as min/max"
+#     # Compute hisotgram on the fly
+#     H = None
+#     varbins = np.linspace(variance_bounds[0], variance_bounds[1], nbins_variance+1)
+#     cpbins = np.linspace(cloud_probability_bounds[0], cloud_probability_bounds[1], nbins_cloud_probability+1)
+#     for dir_ in dirs:
+#         # read nonan
+#         dir_name = dir_.split("/")[-1]
+#         pid = dir_name.split("_")[0]
+#         variance_path = Path(os.path.join(dir_, f"{pid}_variance.tif"))
+#         img_path = list(Path(os.path.join(s2repr_dirs, dir_name, pid)).glob("*.tif"))[0]
+#         with rasterio.open(img_path) as f: 
+#             cp = f.read(f.count)
+#         with rasterio.open(variance_path) as f: 
+#             variance = f.read(variable_index)
+#         valid = np.bitwise_and(cp>=cloud_probability_bounds[0], cp<=cloud_probability_bounds[1])
+#         valid = np.bitwise_and(valid, variance>=variance_bounds[0])
+#         valid = np.bitwise_and(valid, variance<=variance_bounds[1])
+#         valid = np.bitwise_and(valid, ~np.isnan(cp))
+#         valid = np.bitwise_and(valid, ~np.isnan(variance))
+#         variance = variance[valid]
+#         cp = cp[valid]
+#         # local histogram
+#         h = np.histogram2d(x=cp, y=variance, bins=[cpbins, varbins])[0]
+#         h = h[::-1,:]
+#         if H is None: H = h
+#         else: H += h
+#     # if log_counts: H = np.log(H+1)
+#     # plot
+#     if magnification is not None:
+#         from scipy.interpolate import interp2d
+#         f = interp2d(
+#             np.linspace(*cloud_probability_bounds, nbins_cloud_probability), # 0, bound, nbins_cp
+#             np.linspace(*variance_bounds, nbins_variance), # 0, bound, nbins_var
+#             H, kind="linear"
+#         )
+#         nbins_cloud_probability *= magnification
+#         nbins_variance *= magnification
+#         H = f(
+#             np.linspace(*cloud_probability_bounds, nbins_cloud_probability), # 0, bound, nbins_cp
+#             np.linspace(*variance_bounds, nbins_variance), # 0, bound, nbins_var
+#         )
+#     fig = plt.figure(figsize=figsize)
+#     ax = plt.gca()
+#     if log_counts: 
+#         H = np.log(H+1)
+#         sns.heatmap(H, ax=ax, cbar=True)
+#     else: sns.heatmap(H, ax=ax, cbar=True)
+#     ax.set_xticks([0, nbins_variance], [math.floor(variance_bounds[0]), math.ceil(variance_bounds[1])], rotation=0)
+#     ax.set_yticks([0, nbins_cloud_probability], [cloud_probability_bounds[1],cloud_probability_bounds[0]])
+#     ax.set_title(variable_name)
+#     ax.set_xlabel("variance")
+#     ax.set_ylabel("cloud probability")
+#     # if log_counts: 
+#     #     import matplotlib.cm as cm
+#     #     H[H==0] = 1e-2
+#     #     H = np.log(H)
+#     #     pcm = cm.ScalarMappable(norm=LogNorm(H.min(), H.max()))
+#     #     fig.colorbar(pcm, ax=ax)
+#     if save_name is not None: savefigure(fig, save_name)
+#     plt.tight_layout()
+#     plt.show()
