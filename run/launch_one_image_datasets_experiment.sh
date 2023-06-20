@@ -13,7 +13,7 @@ if [[ $MACHINE == "--euler" ]]; then
     module load python/$PYVERSION gdal/$GDALVERSION
     pip install gdal==`gdal-config --version` --user # do not put it in requirements, the version must match local install!
     pip install -r requirements.txt --user
-    options="-n 1 --mem-per-cpu=64000 --time=4:00:00 --job-name=pipeline_one_img_ds --gpus=1 --gres=gpumem:12g"
+    options="-n 1 --mem-per-cpu=24000 --time=45:00 --job-name=pipeline_one_img_ds --gpus=1 --gres=gpumem:4g"
     root="/cluster/work/igp_psr/elwalt/pdm/rs-uncertainty"
 else 
     root="/scratch/ewalt/pdm/rs-uncertainty"
