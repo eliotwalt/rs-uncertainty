@@ -18,9 +18,9 @@ pip install -r requirements.txt --user
 # **************************************************** COMMAND ***************************************************
 set -e 
 echo "***** creating dataset *****"
-python /cluster/work/igp_psr/elwalt/pdm/rs-uncertainty/src/scripts/create_dataset.py --preprocess --cfg CREATE_CONFIG
+python /cluster/work/igp_psr/elwalt/pdm/rs-uncertainty/src/scripts/create_dataset.py --preprocess --cfg $CREATE_CONFIG
 echo "***** predicting testset *****"
-python /cluster/work/igp_psr/elwalt/pdm/rs-uncertainty/src/scripts/predict_testset.py --cfg PREDICT_CONFIG
+python /cluster/work/igp_psr/elwalt/pdm/rs-uncertainty/src/scripts/predict_testset.py --cfg $PREDICT_CONFIG
 echo "***** evaluating testset *****"
-python /cluster/work/igp_psr/elwalt/pdm/rs-uncertainty/src/scripts/evaluate_testset.py --cfg EVAL_CONFIG
+python /cluster/work/igp_psr/elwalt/pdm/rs-uncertainty/src/scripts/evaluate_testset.py --cfg $EVAL_CONFIG
 set +e
