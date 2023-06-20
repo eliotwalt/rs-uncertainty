@@ -1,5 +1,5 @@
 s1_reprojected_dir: 'assets/data/sentinel_data/s1_reprojected'
-s2_reprojected_dir: 'gee_data/reprojected_dirs/' # ADD imageId ($pid_$timestamp)
+s2_reprojected_dir: 'assets/data/sentinel_data/s2_reprojected'
 gt_dir: 'assets/data/preprocessed'
 split_mask_dir: null
 project_shapefiles: ['assets/data/NHM_projectDekning_AOI_edit2015_V2.shp', 'assets/data/ALS_projects_Dz_all_norway.shp']

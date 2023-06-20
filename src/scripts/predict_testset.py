@@ -40,11 +40,12 @@ args = parse_args()
 run = Run(config_files=[args.cfg])
 run.seed_all(12345)
 
-if "add_date_to_save_dir" in run.get_raw_config().keys() and run["add_date_to_save_dir"]:
+if not "add_date_to_save_dir" in run.get_raw_config().keys() or run["add_date_to_save_dir"]:
     save_dir = Path(run["save_dir"]) / (datetime.now().strftime('%Y-%m-%d_%H-%M-%S') + (f'_{run["name"]}' if run['name'] else ''))
 else:
     save_dir = Path(run["save_dir"]) / (f'_{run["name"]}' if run['name'] else '')
 save_dir.mkdir(parents=True)
+print(f"Results will be saved to: {str(save_dir)}")
 
 assert run['patch_size'] % 2 == 1, 'Patch size should be odd.'
 
@@ -96,6 +97,7 @@ num_nans_in_polygon = 0
 gt_projects = set([d.stem for d in Path(run["gt_dir"]).glob("*.tif")])
 s2_projects = set([d.name for d in os.scandir(run["s2_reprojected_dir"])])
 projects = list(s2_projects.intersection(gt_projects).intersection(set(run["projects"])))
+print(f"{len(projects)} projects to process")
 for gt_file_path in Path(run['gt_dir']).glob('*.tif'):
     if gt_file_path.stem not in projects:
         continue
@@ -151,8 +153,8 @@ for gt_file_path in Path(run['gt_dir']).glob('*.tif'):
     step_size = run['patch_size'] - (2 * margin)
 
     num_images_per_pixel = np.zeros((1, *gt_file.shape), dtype=np.uint8)
-    mean = np.full((5, *gt_file.shape), np.nan, dtype=np.float32)
-    variance = np.full((5, *gt_file.shape), np.nan, np.float32)
+    mean = np.full((len(models), 5, *gt_file.shape), np.nan, dtype=np.float32) # (M, 5, H, W)
+    variance = np.full((len(models), 5, *gt_file.shape), np.nan, np.float32) # (M, 5, H, W)
 
     # locate all test stripes within the project region
     stripes = []
@@ -270,17 +272,18 @@ for gt_file_path in Path(run['gt_dir']).glob('*.tif'):
                     num_images_per_pixel[0, i_slice_inner, j_slice_inner] = len(patch_means) // len(models)
 
                     # calculate overall mean & variance for this patch
-                    mean[:, i_slice_inner, j_slice_inner] = torch.cat(patch_means).mean(0)
-                    variance[:, i_slice_inner, j_slice_inner] = torch.cat(patch_variances).mean(0) + \
-                        (torch.cat(patch_means) - mean[:, i_slice_inner, j_slice_inner]).pow(2).mean(0)
+                    mean[:, :, i_slice_inner, j_slice_inner] = torch.cat(patch_means)
+                    variance[:, :, i_slice_inner, j_slice_inner] = torch.cat(patch_variances)
+                    # variance[:, i_slice_inner, j_slice_inner] = torch.cat(patch_variances).mean(0) + \
+                    #     (torch.cat(patch_means) - mean[:, i_slice_inner, j_slice_inner]).pow(2).mean(0)
 
     # set pixels to nan that lie outside the project polygon
-    mean[:, rasterized_polygon == 0.] = np.nan
-    variance[:, rasterized_polygon == 0.] = np.nan
+    mean[:, :, rasterized_polygon == 0.] = np.nan
+    variance[:, :, rasterized_polygon == 0.] = np.nan
 
     # set pixels to nan that are not valid in the ground truth
-    mean[:, ~gt_mask] = np.nan
-    variance[:, ~gt_mask] = np.nan
+    mean[:, :, ~gt_mask] = np.nan
+    variance[:, :, ~gt_mask] = np.nan
 
     stats = {
         'num_predicted_pixels': ((rasterized_polygon == 1.) & ~np.isnan(mean).all(0)).sum().item(),
@@ -315,20 +318,33 @@ for gt_file_path in Path(run['gt_dir']).glob('*.tif'):
             nodata=None,
             dtype='float32'
         )
+        # ensemble predicted mean
         with rasterio.open(save_dir / f'{gt_file_path.stem}_mean.tif', 'w', **profile) as f:
-            f.write(mean)
-
+            f.write(np.nanmean(mean, axis=0))
+        with rasterio.open(save_dir / f'{gt_file_path.stem}_variance.tif', 'w', **profile) as f:
+            f.write(np.nanmean(variance, axis=0)+np.nanmean((variance-np.nanmean(mean, axis=0, keepdims=True))**2, axis=0))
+        # ensemble aleatoric uncertainty
+        with rasterio.open(save_dir / f'{gt_file_path.stem}_aleatoric.tif', 'w', **profile) as f:
+            f.write(np.nanmean(variance, axis=0))
+        # ensemble epistemic uncertainty
+        with rasterio.open(save_dir / f'{gt_file_path.stem}_epistemic.tif', 'w', **profile) as f:
+            f.write(np.nanmean((variance-np.nanmean(mean, axis=0, keepdims=True))**2, axis=0))
+    
     with rasterio.Env():
         profile = gt_file.profile
         profile.update(
             driver='GTiff',
-            count=5,
+            count=len(models)*5,
             compress='deflate',
             nodata=None,
             dtype='float32'
-        )
-        with rasterio.open(save_dir / f'{gt_file_path.stem}_variance.tif', 'w', **profile) as f:
-            f.write(variance)
+        )        
+        # model-wise predicted mean
+        with rasterio.open(save_dir / f'{gt_file_path.stem}_models_mean.tif', 'w', **profile) as f:
+            f.write(mean.reshape(len(models)*5, *gt_file.shape))
+        # model-wise predicted variance
+        with rasterio.open(save_dir / f'{gt_file_path.stem}_models_variance.tif', 'w', **profile) as f:
+            f.write(variance.reshape(len(models)*5, *gt_file.shape))        
 
     gt_file.close()
 

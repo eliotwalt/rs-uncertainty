@@ -592,20 +592,23 @@ def showPredictionMaps(dirs, titles, variable_index, variable_name, s2repr_dirs,
             rgb = norm2d(rgb, rgbmin, rgbmax)
             gt = norm2d(gt, gtmin, gtmax)
             mean = norm2d(mean, gtmin, gtmax)
-            variance = norm2d(variance, variancemin, variancemax)
+            # variance = norm2d(variance, variancemin, variancemax)
+            variance = norm2d(variance, gtmin**2, gtmax**2)
         rerror = mean-gt
         cerror = np.abs(rerror)-np.sqrt(variance)
         axs[i,0].imshow(rgb)
         if i ==0: axs[i,0].set_title(f"RGB")
         sns.heatmap(gt, ax=axs[i,1], 
-            vmin=min(np.nanmin(mean), np.nanmean(gt)), 
-            vmax=max(np.nanmax(mean), np.nanmax(gt))
+            vmin=0, vmax=1,
+            # vmin=min(np.nanmin(mean), np.nanmean(gt)), 
+            # vmax=max(np.nanmax(mean), np.nanmax(gt))
         )
         if i==0: axs[i,1].set_title(f"gt ({gt_date.strftime('%d.%m.%Y')})")
         # break
         sns.heatmap(mean, ax=axs[i,2], 
-            vmin=min(np.nanmin(mean), np.nanmean(gt)), 
-            vmax=max(np.nanmax(mean), np.nanmax(gt))
+            vmin=0, vmax=1,
+            # vmin=min(np.nanmin(mean), np.nanmean(gt)), 
+            # vmax=max(np.nanmax(mean), np.nanmax(gt))
         )
         if i==0: axs[i,2].set_title(f"mean")
         sns.heatmap(variance, ax=axs[i,3], vmin=np.nanmin(variance), vmax=np.nanmax(variance))
@@ -768,20 +771,22 @@ def showSinglePredictionMaps(dir_, title, variable_index, variable_name, s2repr_
         rgb = norm2d(rgb, rgbmin, rgbmax)
         gt = norm2d(gt, gtmin, gtmax)
         mean = norm2d(mean, gtmin, gtmax)
-        variance = norm2d(variance, variancemin, variancemax)
+        variance = norm2d(variance, gtmin**2, gtmax**2)
     rerror = mean-gt
     cerror = np.abs(rerror)-np.sqrt(variance)
     axs[0].imshow(rgb)
     axs[0].set_title(f"rgb")
     sns.heatmap(gt, ax=axs[1], 
-        vmin=min(np.nanmin(mean), np.nanmean(gt)), 
-        vmax=max(np.nanmax(mean), np.nanmax(gt))
+        vmin=0, vmax=1,
+        # vmin=min(np.nanmin(mean), np.nanmean(gt)), 
+        # vmax=max(np.nanmax(mean), np.nanmax(gt))
     )
     axs[1].set_title(f"gt")
     # break
     sns.heatmap(mean, ax=axs[2], 
-        vmin=min(np.nanmin(mean), np.nanmean(gt)), 
-        vmax=max(np.nanmax(mean), np.nanmax(gt))
+        vmin=0, vmax=1,
+        # vmin=min(np.nanmin(mean), np.nanmean(gt)), 
+        # vmax=max(np.nanmax(mean), np.nanmax(gt))
     )
     axs[2].set_title(f"mean")
     sns.heatmap(variance, ax=axs[3], vmin=np.nanmin(variance), vmax=np.nanmax(variance))
@@ -920,16 +925,18 @@ def loadMetricsDataFrame(matching_dirs, metrics=["mse", "ence", "auce", "cv"],
     fulldf = pd.DataFrame(data)
     return fulldf
 
-def plotTrainTestMetricsDataFrames(train_df, test_df, type="bar", save_name=None, figsize=(15,10)):
+def plotTrainTestMetricsDataFrames(train_df, test_df, type="bar", save_name=None, 
+                                   variables=None, split_splits=True, figsize=(15,10)):
     assert type in ["bar", "scatter"]
     metrics_df = pd.concat([train_df, test_df])
+    variables = variables if variables is not None else metrics_df.variable.unique()
     fig, axs = plt.subplots(
         nrows=len(metrics_df.metric.unique()),
-        ncols=len(metrics_df.variable.unique()),
+        ncols=len(variables),
         figsize=figsize
     )
     for i, m in enumerate(metrics_df.metric.unique()):
-        for j, v in enumerate(metrics_df.variable.unique()):
+        for j, v in enumerate(variables):
             tmp = (metrics_df
                    .query(f"metric == '{m}' & variable == '{v}'")
                    .drop(columns=["metric", "variable", "imageId"]))
@@ -937,14 +944,18 @@ def plotTrainTestMetricsDataFrames(train_df, test_df, type="bar", save_name=None
                .groupby(by=["source", "split"])
                .mean()
                .reset_index())
+            xx = "split" if split_splits else None
+            hue = "source" if split_splits else "split"
             if type == "scatter":
-                sns.scatterplot(data=tmp, x="split", y="x", hue="source", ax=axs[i,j], marker="o", s=20, alpha=0.4)
-                sns.scatterplot(data=mtmp, x="split", y="x", hue="source", ax=axs[i,j], marker="_", s=100, linewidth=2)
+                sns.scatterplot(data=tmp, x=xx, y="x", hue=hue, ax=axs[i,j], marker="o", s=20, alpha=0.4)
+                sns.scatterplot(data=mtmp, x=xx, y="x", hue=hue, ax=axs[i,j], marker="_", s=100, linewidth=2)
                 axs[i,j].set(xlim=(-0.5, 1.5))
             else:
-                sns.barplot(data=tmp, x="split", y="x", hue="source", ax=axs[i,j], 
-                            hue_order=["original", "gee"], errorbar=None)
-            axs[i,j].get_legend().remove()
+                kw = {"hue_order": ["original", "gee"]} if split_splits else {}
+                sns.barplot(data=tmp, x=xx, y="x", hue=hue, ax=axs[i,j], 
+                            errorbar=None, **kw)
+            try: axs[i,j].get_legend().remove()
+            except: continue
             axs[i,j].set_xlabel("")
             axs[i,j].set_ylabel("")
             if i==0:

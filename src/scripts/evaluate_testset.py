@@ -60,6 +60,7 @@ def main():
     hi_variance = np.full((5,), -np.inf)
     variance_files = []
     for variance_file in tqdm(list(cfg["prediction_dir"].glob("*_variance.tif"))):
+        if variance_file.stem.__contains__("models_variance"): continue
         if variance_file.stem.split("_")[0] not in projects: continue
         variance_files.append(variance_file)
         with rasterio.open(variance_file) as fh:

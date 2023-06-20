@@ -107,6 +107,7 @@ class StratifiedHistogram(StratifiedTensor):
         - binned_values (List[np.ndarray[num_variables, num_samples]]): list of num_variables arrays containing values of each bin
         - binned_others (List[List[np.ndarray[num_variables, num_samples]]]): list of list of num_variables arrays containing other values in each bin
         """
+        assert values.shape[0] == self.num_variables, f"Invalid values shape: {values.shape}"
         # X: (vars, groups, bin) -> add to X[:,index,:]        
         binned_values = [[[] for _ in range(self.num_bins)] for _ in range(self.num_variables)]
         if others is not None: 
