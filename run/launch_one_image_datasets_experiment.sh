@@ -24,7 +24,10 @@ echo "Running autoconfig..."
 createConfig=$2
 predictConfig=$3
 evalConfig=$4
-mapfile -t configTriplets < <(python ${root}/src/scripts/configure_one_image_dataset_experiment.py --create ${createConfig} --predict ${predictConfig} --eval ${evalConfig})
+if [[ $MACHINE == "--euler" ]]; then
+    mapfile -t configTriplets < <(python ${root}/src/scripts/configure_one_image_dataset_experiment.py --create ${createConfig} --predict ${predictConfig} --eval ${evalConfig} --tmp_dir ${root}/tmp)
+else 
+    mapfile -t configTriplets < <(python ${root}/src/scripts/configure_one_image_dataset_experiment.py --create ${createConfig} --predict ${predictConfig} --eval ${evalConfig})
 
 # submit pipeline job
 for (( i=0; i<${#configTriplets[@]}; i++ ));

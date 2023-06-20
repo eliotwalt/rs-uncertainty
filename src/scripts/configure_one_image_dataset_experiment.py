@@ -34,11 +34,12 @@ def get_args():
     p.add_argument("--create", help="create dataset config template")
     p.add_argument("--predict", help="predict testset config template")
     p.add_argument("--eval", help="eval testset config template")
+    p.add_argument("--tmp_dir", help="tmp dir", default="/tmp", required=False)
     args = p.parse_args()
-    return args.create, args.predict, args.eval
+    return args.create, args.predict, args.eval, args.tmp_dir
 
 if __name__ == "__main__":
-    create_path, predict_path, eval_path = get_args()
+    create_path, predict_path, eval_path, tmp_dir = get_args()
     with open(create_path) as f:
         create_config = yaml.safe_load(f)
     with open(predict_path) as f:
@@ -48,7 +49,7 @@ if __name__ == "__main__":
     check_integrity(create_config, predict_config, eval_config)
     # Loop on single image dirs
     for imageDir in os.scandir(Path(create_config["s2_reprojected_dir"]).parents[0]):
-        td = Path(f"/tmp/1imgds_{imageDir.name}")
+        td = Path(f"{tmp_dir}/1imgds_{imageDir.name}")
         if os.path.isdir(td): shutil.rmtree(td)
         td.mkdir()
         subcreate_config, subpredict_config, subeval_config = deepcopy(create_config), deepcopy(predict_config), deepcopy(eval_config)
