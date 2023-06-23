@@ -253,8 +253,8 @@ def savefigure(fig, name):
     fig.savefig(name+".png", dpi=300)
     fig.savefig(name+".pdf", dpi=200)
 
-def get_nonzero_avg_cp_visualizer(result_dirs, s2repr_dirs, variable_names, max_n, bins):
-    exp_vars = []
+def filterZeroAvgCp(result_dirs, s2repr_dirs):
+    exp_vars =  []
     nnz_result_dirs = []
     for result_dir in result_dirs:
         dir_name = result_dir.split("/")[-1]
@@ -265,6 +265,10 @@ def get_nonzero_avg_cp_visualizer(result_dirs, s2repr_dirs, variable_names, max_
             if mean != 0.:
                 exp_vars.append(mean)
                 nnz_result_dirs.append(result_dir)
+    return exp_vars, nnz_result_dirs
+
+def get_nonzero_avg_cp_visualizer(result_dirs, s2repr_dirs, variable_names, max_n, bins):
+    exp_vars, nnz_result_dirs = filterZeroAvgCp(result_dirs, s2repr_dirs)
     bin_ids = np.digitize(exp_vars, bins=bins)-1
     selected_exp_vars, selected_nnz_result_dirs = [], []
     for bin_id in np.unique(bin_ids):
@@ -331,10 +335,10 @@ def showSplit(gt_path, split_mask, islices, jslices,
     plt.show()
 
 def showRGB(dirs, s2repr_dirs, titles=None, islice=None, jslice=None, draw_bbox=False, 
-            figsize=(12, 4), split_mask=None, save_name=None, color="g"):
+            figsize=(12, 4), split_mask=None, save_name=None, color="g", nrows=1):
     n = len(dirs)
-    fig, axs = plt.subplots(ncols=len(dirs), nrows=1, figsize=figsize)
-    if len(titles)>1: axs = axs.flatten()
+    fig, axs = plt.subplots(ncols=math.ceil(len(dirs)/nrows), nrows=nrows, figsize=figsize)
+    if len(dirs)>1 or nrows>1: axs = axs.flatten()
     else: axs = [axs]
     i = 0
     for d, ax in zip(dirs, axs):

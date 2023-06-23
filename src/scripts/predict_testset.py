@@ -322,13 +322,13 @@ for gt_file_path in Path(run['gt_dir']).glob('*.tif'):
         with rasterio.open(save_dir / f'{gt_file_path.stem}_mean.tif', 'w', **profile) as f:
             f.write(np.nanmean(mean, axis=0))
         with rasterio.open(save_dir / f'{gt_file_path.stem}_variance.tif', 'w', **profile) as f:
-            f.write(np.nanmean(variance, axis=0)+np.nanmean((variance-np.nanmean(mean, axis=0, keepdims=True))**2, axis=0))
+            f.write(np.nanmean(variance, axis=0)+np.nanmean((mean-np.nanmean(mean, axis=0, keepdims=True))**2, axis=0))
         # ensemble aleatoric uncertainty
         with rasterio.open(save_dir / f'{gt_file_path.stem}_aleatoric.tif', 'w', **profile) as f:
             f.write(np.nanmean(variance, axis=0))
         # ensemble epistemic uncertainty
         with rasterio.open(save_dir / f'{gt_file_path.stem}_epistemic.tif', 'w', **profile) as f:
-            f.write(np.nanmean((variance-np.nanmean(mean, axis=0, keepdims=True))**2, axis=0))
+            f.write(np.nanmean((mean-np.nanmean(mean, axis=0, keepdims=True))**2, axis=0))
     
     with rasterio.Env():
         profile = gt_file.profile

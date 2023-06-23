@@ -31,10 +31,10 @@ else
 fi
 
 # submit pipeline job
-for (( i=0; i<${#configTriplets[@]}; i++ ));
-do
-    read -a configTriplet <<< "${configTriplets[$i]}"
-    if [[ $MACHINE == "--euler" ]]; then 
+if [[ $MACHINE == "--euler" ]]; then 
+    for (( i=0; i<${#configTriplets[@]}; i++ ));
+    do
+        read -a configTriplet <<< "${configTriplets[$i]}"
         echo "Submitting pipeline job for: ${configTriplet[@]}"
         # get log files
         log_name=$(echo $(basename ${configTriplet[0]}) | cut -d "." -f 1)
@@ -47,17 +47,29 @@ do
         retvalue=($(sbatch $options /cluster/work/igp_psr/elwalt/pdm/rs-uncertainty/run/slurm/pipeline.sh ${configTriplets[$i]}))
         echo "${retvalue[@]}"
         job_ids+=(${retvalue[-1]})
-    else
+    done
+else
+    run_pipeline() {
         set -e 
         echo "***** creating dataset *****"
-        python ${root}/src/scripts/create_dataset.py --preprocess --cfg ${configTriplet[0]}
+        python ${root}/src/scripts/create_dataset.py --preprocess --cfg $1
         echo "***** predicting testset *****"
-        python ${root}/src/scripts/predict_testset.py --cfg ${configTriplet[1]}
+        python ${root}/src/scripts/predict_testset.py --cfg $2
         echo "***** evaluating testset *****"
-        python ${root}/src/scripts/evaluate_testset.py --cfg ${configTriplet[2]}
+        python ${root}/src/scripts/evaluate_testset.py --cfg $3
         set +e
-    fi 
-done
+    }
+    # for (( i=0; i<${#configTriplets[@]}; i+=4 ));
+    for (( i=0; i<${#configTriplets[@]}; i++ ));
+    do
+        # for (( j=i; j<i+4; j+=4 ));
+        # do
+        #     (run_pipeline ${configTriplets[$j]}) &
+        # done
+        # wait
+        run_pipeline ${configTriplets[$i]}
+    done
+fi 
 
 if [[ $MACHINE == "--euler" ]]; then
     echo "Job ids: ${job_ids}"
