@@ -234,6 +234,66 @@ class ExperimentVisualizer():
             fig.tight_layout()
             savefigure(fig, save_name)
         return axs
+
+def getPaths(
+    src_dir, 
+    s2repr_dirs=None, 
+    gt_dir=None,
+    returns=None
+):
+    src_dir = str(src_dir)
+    if returns is None:
+        return
+    rname = lambda x: "_".join(Path(x).stem.split("_")[1:])
+    valid_returns = ["img", "gt"] + [rname(p.path) for p in os.scandir(src_dir)]
+    # start logic
+    dir_name = src_dir.split("/")[-1]
+    pid = dir_name.split("_")[0]
+    retuple = []
+    for r in returns: 
+        assert r in valid_returns
+        if r=="img":
+            assert s2repr_dirs is not None, "must provide s2repr_dirs to get img"
+            retuple.append(
+                list(Path(os.path.join(s2repr_dirs, dir_name, pid)).glob("*.tif"))[0]
+            )
+        elif r=="gt":
+            assert gt_dir is not None, "must provide gt_dir to get gt"
+            retuple.append(os.path.join(gt_dir, f"{pid}.tif"))
+        else:
+            retuple.append(os.path.join(src_dir, f"{pid}_{r}.tif"))
+        assert os.path.exists(retuple[-1])
+    return tuple(retuple)
+
+def loadRaster(
+    path,
+    bands=None, # set to None for all bands, -1 for last one
+    islice=None,
+    jslice=None,
+    clip_range=None,
+    transpose_order=None,
+    set_nan_mask=False, # for gt
+    dtype=None,
+    elementwise_fn=None
+):
+    with rasterio.open(path) as f:
+        if bands is None: bands = f.indexes
+        if bands == -1: bands = f.count
+        x = f.read(bands)
+        if set_nan_mask:
+            mask = f.read_masks(1)
+            x[mask==0] = np.nan
+        if islice is not None:
+            if isinstance(bands, list): x = x[:,islice]
+            else: x = x[islice]
+        if jslice is not None:
+            if isinstance(bands, list): x = x[:,:,jslice]
+            else: x = x[:,jslice]
+        if clip_range is not None: x = clp(x, clip_range)
+        if transpose_order is not None: x = x.transpose(*transpose_order)
+        if dtype is not None: x = x.astype(dtype)
+        if elementwise_fn is not None: x = elementwise_fn(x)
+    return x
     
 def clip(arr, bounds):
     bounds = (float(bounds[0]), float(bounds[1]))
@@ -243,10 +303,19 @@ def clip(arr, bounds):
     arr /= (bounds[1]-bounds[0])
     return arr
 
+def multiMinMax(*sources, axis=None):
+    return min(*[np.nanmin(source, axis=axis) for source in sources]), max(*[np.nanmax(source, axis=axis) for source in sources])
+
 def norm2d(x, mn=None, mx=None, a=0, b=1): 
     if mn is None: mn = np.nanmin(x)
     if mx is None: mx = np.nanmax(x)
     return (b-a)*(x-mn)/(mx-mn)+a
+
+def multiNorm2d(*sources, a=0, b=1, axis=None, return_bounds=False):
+    mn, mx = multiMinMax(*source, axis)
+    res = [norm2d(source, mn, mx, a, b) for source in sources]
+    if return_bounds: return tuple([res]+[min, mx])
+    else: return tuple(res)
 
 def savefigure(fig, name):
     Path(name).parent.mkdir(parents=True, exist_ok=True)
@@ -257,14 +326,11 @@ def filterZeroAvgCp(result_dirs, s2repr_dirs):
     exp_vars =  []
     nnz_result_dirs = []
     for result_dir in result_dirs:
-        dir_name = result_dir.split("/")[-1]
-        project_id = dir_name.split("_")[0]
-        img_path = list(Path(os.path.join(s2repr_dirs, dir_name, project_id)).glob("*.tif"))[0]
-        with rasterio.open(img_path) as f:
-            mean = f.read(f.count).astype("float").mean()
-            if mean != 0.:
-                exp_vars.append(mean)
-                nnz_result_dirs.append(result_dir)
+        img_path = getPaths(result_dir, s2repr_dirs, returns=["img"])
+        mean = loadRaster(img_path, bands=-1, dtype="float")
+        if mean != 0.:
+            exp_vars.append(mean)
+            nnz_result_dirs.append(result_dir)
     return exp_vars, nnz_result_dirs
 
 def get_nonzero_avg_cp_visualizer(result_dirs, s2repr_dirs, variable_names, max_n, bins):
@@ -346,40 +412,37 @@ def showRGB(dirs, s2repr_dirs, titles=None, islice=None, jslice=None, draw_bbox=
         pid = dir_name.split("_")[0]
         img_path = list(Path(os.path.join(s2repr_dirs, dir_name, pid)).glob("*.tif"))[0]
         title = i if titles is None else titles[i]
-        with rasterio.open(img_path) as f:
-            rgb = f.read([4,3,2])
-            rgb = clip(rgb, (100, 2000))
-            rgb = rgb.transpose(1,2,0)
-            if islice is not None and jslice is not None: 
-                if not isinstance(islice, list): islice = [islice]
-                if not isinstance(jslice, list): jslice = [jslice]
-                if isinstance(color, list): assert len(color)==len(islice)
-                assert len(islice)==len(jslice)
-                for k, (islc, jslc) in enumerate(zip(islice, jslice)):
-                    if not draw_bbox:
-                        rgb = rgb[islc,jslc]
-                        ax.imshow(rgb)
-                        if split_mask is not None:
-                            ax.imshow(split_mask[islc, jslc], alpha=0.2)
-                    else:
-                        ax.imshow(rgb)
-                        if split_mask is not None:
-                            ax.imshow(split_mask, alpha=0.2)
-                        if isinstance(color, list): kw = {"color": color[k]}
-                        elif isinstance(color, str): kw = {"color": color}
-                        else: kw={}
-                        ax.add_patch(
-                            patches.Rectangle(
-                                (jslc.start, islc.start), # top left corner
-                                jslc.stop-jslc.start, # positive width
-                                islc.stop-islc.start, # positive height
-                                linewidth=2,
-                                fill=False,
-                                **kw
-                            )
+        rgb = loadRaster(img_path, bands=[4,3,2], clip_range=(100, 2000), transpose_order=(1,2,0))
+        if islice is not None and jslice is not None: 
+            if not isinstance(islice, list): islice = [islice]
+            if not isinstance(jslice, list): jslice = [jslice]
+            if isinstance(color, list): assert len(color)==len(islice)
+            assert len(islice)==len(jslice)
+            for k, (islc, jslc) in enumerate(zip(islice, jslice)):
+                if not draw_bbox:
+                    rgb = rgb[islc,jslc]
+                    ax.imshow(rgb)
+                    if split_mask is not None:
+                        ax.imshow(split_mask[islc, jslc], alpha=0.2)
+                else:
+                    ax.imshow(rgb)
+                    if split_mask is not None:
+                        ax.imshow(split_mask, alpha=0.2)
+                    if isinstance(color, list): kw = {"color": color[k]}
+                    elif isinstance(color, str): kw = {"color": color}
+                    else: kw={}
+                    ax.add_patch(
+                        patches.Rectangle(
+                            (jslc.start, islc.start), # top left corner
+                            jslc.stop-jslc.start, # positive width
+                            islc.stop-islc.start, # positive height
+                            linewidth=2,
+                            fill=False,
+                            **kw
                         )
-            else:
-                ax.imshow(rgb)
+                    )
+        else:
+            ax.imshow(rgb)
         ax.set_title(title)
         ax.set_axis_off()
         i += 1
@@ -391,60 +454,43 @@ def showPairedMaps(matching_dirs, variable_index, variable_name, islice=None, js
                      normalize=False, save_name=None, figsize=(15,11)):
     fig, axs = plt.subplots(nrows=len(matching_dirs), ncols=6, figsize=figsize)
     for i, (orig_dir, gee_dir) in enumerate(matching_dirs):
-        pid = gee_dir.name.split("_")[0]
+        # paths
+        gee_mean_path, gee_variance_path = getPaths(gee_dir, returns=["mean", "variance"])
+        orig_mean_path, orig_variance_path = getPaths(orig_dir, returns=["mean", "variance"])
         # means
-        with rasterio.open(os.path.join(gee_dir, f"{pid}_mean.tif")) as f:
-            gee_mean = f.read(variable_index)
-            if islice is not None: gee_mean = gee_mean[islice]
-            if jslice is not None: gee_mean = gee_mean[:,jslice]
-        with rasterio.open(os.path.join(orig_dir, f"{pid}_mean.tif")) as f:
-            orig_mean = f.read(variable_index)
-            if islice is not None: orig_mean = orig_mean[islice]
-            if jslice is not None: orig_mean = orig_mean[:,jslice]
+        gee_mean = loadRaster(gee_mean_path, bands=variable_index, islice=islice, jslice=jslice)
+        orig_mean = loadRaster(orig_mean_path, bands=variable_index, islice=islice, jslice=jslice)
         # variances
-        with rasterio.open(os.path.join(gee_dir, f"{pid}_variance.tif")) as f:
-            gee_variance = f.read(variable_index)
-            if islice is not None: gee_variance = gee_variance[islice]
-            if jslice is not None: gee_variance = gee_variance[:,jslice]
-        with rasterio.open(os.path.join(orig_dir, f"{pid}_variance.tif")) as f:
-            orig_variance = f.read(variable_index)
-            if islice is not None: orig_variance = orig_variance[islice]
-            if jslice is not None: orig_variance = orig_variance[:,jslice]
+        gee_predictive_std = loadRaster(gee_variance_path, bands=variable_index, islice=islice, jslice=jslice, elementwise_fn=np.sqrt)
+        orig_predictive_std = loadRaster(orig_variance_path, bands=variable_index, islice=islice, jslice=jslice, elementwise_fn=np.sqrt)
         if normalize:
-            # get stats
-            meanmax, meanmin = np.nanmax(orig_mean), np.nanmin(orig_mean)
-            variancemax, variancemin = np.nanmax(orig_variance), np.nanmin(orig_variance)
-            # apply
-            gee_mean = norm2d(gee_mean, meanmin, meanmax)
-            orig_mean = norm2d(orig_mean, meanmin, meanmax)
-            gee_variance = norm2d(gee_variance, variancemin, variancemax)
-            orig_variance = norm2d(orig_variance, variancemin, variancemax)
+            # # get stats
+            # meanmax, meanmin = np.nanmax(orig_mean), np.nanmin(orig_mean)
+            # variancemax, variancemin = np.nanmax(orig_variance), np.nanmin(orig_variance)
+            # # apply
+            # gee_mean = norm2d(gee_mean, meanmin, meanmax)
+            # orig_mean = norm2d(orig_mean, meanmin, meanmax)
+            # gee_variance = norm2d(gee_variance, variancemin, variancemax)
+            # orig_variance = norm2d(orig_variance, variancemin, variancemax)
+            orig_mean, gee_mean, orig_predictive_std, gee_predictive_std = multiNorm2d(orig_mean, gee_mean, orig_predictive_std, gee_predictive_std)
+            vmin, vmax = 0, 1
+        else:
+            vmin, vmax = multiMinMax(orig_mean, gee_mean, orig_predictive_std, gee_predictive_std)
+        dvmin, dvmax = vmin-vmax, vmax-vmin
         meandiff = gee_mean-orig_mean
-        variancediff = gee_variance-orig_variance
-        sns.heatmap(orig_mean, ax=axs[i,0], 
-            vmin=min(np.nanmin(gee_mean), np.nanmean(orig_mean)), 
-            vmax=max(np.nanmax(gee_mean), np.nanmax(orig_mean))
-        )
+        predictive_stddiff = gee_predictive_std-orig_predictive_std
+        sns.heatmap(orig_mean, ax=axs[i,0], vmin=vmin, vmax=vmax)
         if i==0: axs[i,0].set_title(f"original mean")
-        sns.heatmap(gee_mean, ax=axs[i,1], 
-            vmin=min(np.nanmin(gee_mean), np.nanmean(orig_mean)), 
-            vmax=max(np.nanmax(gee_mean), np.nanmax(orig_mean))
-        )
+        sns.heatmap(gee_mean, ax=axs[i,1], vmin=vmin, vmax=vmax)
         if i==0: axs[i,1].set_title(f"gee mean")
-        sns.heatmap(meandiff, ax=axs[i,2], cmap="bwr", vmin=-1, vmax=1)
+        sns.heatmap(meandiff, ax=axs[i,2], cmap="bwr", vmin=dvmin, vmax=dvmax)
         if i==0: axs[i,2].set_title(f"difference mean")
-        sns.heatmap(orig_variance, ax=axs[i,3], 
-            vmin=min(np.nanmin(gee_variance), np.nanmean(orig_variance)), 
-            vmax=max(np.nanmax(gee_variance), np.nanmax(orig_variance))
-        )
-        if i == 0: axs[i,3].set_title(f"original variance")
-        sns.heatmap(gee_variance, ax=axs[i,4], 
-            vmin=min(np.nanmin(gee_variance), np.nanmean(orig_variance)), 
-            vmax=max(np.nanmax(gee_variance), np.nanmax(orig_variance))
-        )
-        if i == 0: axs[i,4].set_title(f"gee variance")
-        sns.heatmap(variancediff, ax=axs[i,5], cmap="bwr", vmin=-1, vmax=1)
-        if i == 0: axs[i,5].set_title(f"difference variance")
+        sns.heatmap(orig_variance, ax=axs[i,3], vmin=vmin, vmax=vmax)
+        if i == 0: axs[i,3].set_title(f"original PU")
+        sns.heatmap(gee_variance, ax=axs[i,4], vmin=vmin, vmax=vmax)
+        if i == 0: axs[i,4].set_title(f"gee PU")
+        sns.heatmap(predictive_stddiffdiff, ax=axs[i,5], cmap="bwr", vmin=dvmin, vmax=dvmax)
+        if i == 0: axs[i,5].set_title(f"difference PU")
     for ax in axs.flatten(): 
         ax.set_xticks([])
         ax.set_yticks([])
@@ -456,42 +502,36 @@ def showPairedMaps(matching_dirs, variable_index, variable_name, islice=None, js
     plt.show()
     
 def showPairedHistograms(matching_dirs, variable_index, variable_name, islice=None, jslice=None, 
-                           log_mean=False, log_variance=False, save_name=None, figsize=(10, 15)):
+                           log_mean=False, log_uncertainty=False, save_name=None, figsize=(10, 15),
+                           normalize=False):
     fig, axs = plt.subplots(nrows=len(matching_dirs), ncols=2, figsize=figsize)
     for i, (orig_dir, gee_dir) in enumerate(matching_dirs):
-        pid = gee_dir.name.split("_")[0]
+        # paths
+        gee_mean_path, gee_variance_path = getPaths(gee_dir, returns=["mean", "variance"])
+        orig_mean_path, orig_variance_path = getPaths(orig_dir, returns=["mean", "variance"])
         # means
-        with rasterio.open(os.path.join(gee_dir, f"{pid}_mean.tif")) as f:
-            gee_mean = f.read(variable_index)
-            if islice is not None and jslice is not None: gee_mean = gee_mean[islice, jslice]
-            gee_mean = gee_mean.flatten()
-        with rasterio.open(os.path.join(orig_dir, f"{pid}_mean.tif")) as f:
-            orig_mean = f.read(variable_index)
-            if islice is not None and jslice is not None: orig_mean = orig_mean[islice, jslice]
-            orig_mean = orig_mean.flatten()
+        gee_mean = loadRaster(gee_mean_path, bands=variable_index, islice=islice, jslice=jslice).flatten()
+        orig_mean = loadRaster(orig_mean_path, bands=variable_index, islice=islice, jslice=jslice).flatten()
         # variances
-        with rasterio.open(os.path.join(gee_dir, f"{pid}_variance.tif")) as f:
-            gee_variance = f.read(variable_index)
-            if islice is not None and jslice is not None: gee_variance = gee_variance[islice, jslice]
-            gee_variance = gee_variance.flatten()
-        with rasterio.open(os.path.join(orig_dir, f"{pid}_variance.tif")) as f:
-            orig_variance = f.read(variable_index)
-            if islice is not None and jslice is not None: orig_variance = orig_variance[islice, jslice]
-            orig_variance = orig_variance.flatten()
+        gee_predictive_std = loadRaster(gee_variance_path, bands=variable_index, islice=islice, jslice=jslice, elementwise_fn=np.sqrt).flatten()
+        orig_predictive_std = loadRaster(orig_variance_path, bands=variable_index, islice=islice, jslice=jslice, elementwise_fn=np.sqrt).flatten()
+        # normalize
+        if normalize:
+            orig_mean, gee_mean, orig_predictive_std, gee_predictive_std = multiNorm2d(orig_mean, gee_mean, orig_predictive_std, gee_predictive_std)
         km = "mean" if not log_mean else "log mean"
         mdf = pd.DataFrame({
             "source": ["original" for _ in orig_mean]+["gee" for _ in gee_mean],
             km: orig_mean.tolist()+gee_mean.tolist()
         })
-        kv = "variance" if not log_variance else "log variance"
+        kv = "predictive uncertainty" if not log_uncertainty else "log predictive uncertainty"
         vdf = pd.DataFrame({
-            "source": ["original" for _ in orig_variance]+["gee" for _ in gee_variance],
-            kv: orig_variance.tolist()+gee_variance.tolist()
+            "source": ["original" for _ in orig_predictive_std]+["gee" for _ in gee_predictive_std],
+            kv: orig_predictive_std.tolist()+gee_predictive_std.tolist()
         })
-        sns.histplot(data=mdf, x=km, hue="source", ax=axs[i,0])
+        sns.histplot(data=mdf, x=km, hue="source", ax=axs[i,0], multiple="dodge")
         axs[i,0].set_title(datetime.strptime(orig_dir.name.split("_")[1].split("T")[0], '%Y%m%d').strftime("%d.%m.%Y"))
         if log_mean: axs[i,0].set_xscale("log")
-        sns.histplot(data=vdf, x=kv, hue="source", ax=axs[i,1])
+        sns.histplot(data=vdf, x=kv, hue="source", ax=axs[i,1], multiple="dodge")
         axs[i,1].set_title(datetime.strptime(orig_dir.name.split("_")[1].split("T")[0], '%Y%m%d').strftime("%d.%m.%Y"))
         axs[i,1].set_ylabel("")
         if log_variance: axs[i,1].set_xscale("log")
@@ -504,7 +544,8 @@ def showPairedHistograms(matching_dirs, variable_index, variable_name, islice=No
     plt.show()
 
 def showMeanDifferenceMaps(orig_path, gee_path, 
-                           variable_index, variable_name,
+                           variable_index, 
+                           variable_name,
                            islices, jslices,
                            row_labels,
                            normalize=False, 
@@ -515,10 +556,8 @@ def showMeanDifferenceMaps(orig_path, gee_path,
     assert len(islices)%nrows==0
     gee_dir = Path(gee_path).parent
     # Load data
-    with rasterio.open(orig_path) as f:
-        orig_mean = f.read(variable_index)
-    with rasterio.open(gee_path) as f:
-        gee_mean = f.read(variable_index)
+    orig_mean = loadRaster(orig_path, bands=variable_index)
+    gee_mean = loadRaster(gee_path, bands=variable_index)
     # figure
     fig, axs = plt.subplots(nrows=nrows, ncols=len(islices)//nrows, figsize=figsize)
     axs = axs.flatten()
@@ -531,17 +570,17 @@ def showMeanDifferenceMaps(orig_path, gee_path,
         O = orig_mean[islice,jslice].copy()
         G = gee_mean[islice,jslice].copy()
         if normalize:
-            # get stats
-            mx, mn = np.nanmax(O), np.nanmin(O)
-            # apply
-            O = norm2d(O, mn, mx)
-            G = norm2d(G, mn, mx)
+            orig_mean, gee_mean, orig_predictive_std, gee_predictive_std = multiNorm2d(orig_mean, gee_mean, orig_predictive_std, gee_predictive_std)
+            vmin, vmax = 0, 1
+        else:
+            vmin, vmax = multiMinMax(orig_mean, gee_mean, orig_predictive_std, gee_predictive_std)
+        dvmin, dvmax = vmin-vmax, vmax-vmin
         rerror = G-O
         sns.heatmap(
             rerror,
             cmap="bwr",
-            vmin=-1, 
-            vmax=1,
+            vmin=dvmin, 
+            vmax=dvmax,
             ax=ax
         )
         ax.set_xticks([])
@@ -561,65 +600,44 @@ def showPredictionMaps(dirs, titles, variable_index, variable_name, s2repr_dirs,
     for i, d in enumerate(dirs):
         dir_name = d.split("/")[-1]
         pid = dir_name.split("_")[0]
-        img_path = list(Path(os.path.join(s2repr_dirs, dir_name, pid)).glob("*.tif"))[0]
-        mean_path = Path(os.path.join(d, f"{pid}_mean.tif"))
-        variance_path = Path(os.path.join(d, f"{pid}_variance.tif"))
-        gt_path = os.path.join(gt_dir, f"{pid}.tif")
         gt_date = compute_gt_date(pid, shapefile_paths)
-        with rasterio.open(img_path) as f:
-            rgb = f.read([4,3,2])
-            rgb = clip(rgb, (100, 2000))
-            rgb = rgb.transpose(1,2,0)
-            if islice is not None: rgb = rgb[islice]
-            if jslice is not None: rgb = rgb[:,jslice]
-        with rasterio.open(gt_path) as f:
-            gt = f.read(variable_index)
-            gt_mask = f.read_masks(1)//255
-            gt[gt_mask==0]=np.nan
-            if variable_index in [3,5]: gt /= 100 # Cover/Dens normalization!!
-            if islice is not None: gt = gt[islice]
-            if jslice is not None: gt = gt[:,jslice]
-        with rasterio.open(mean_path) as f:
-            mean = f.read(variable_index)
-            if islice is not None: mean = mean[islice]
-            if jslice is not None: mean = mean[:,jslice]
-        with rasterio.open(variance_path) as f:
-            variance = f.read(variable_index)
-            if islice is not None: variance = variance[islice]
-            if jslice is not None: variance = variance[:,jslice]
+        img_path, mean_path, variance_path, gt_path = getPaths(d, s2repr_dirs, gt_dir, returns=["img","mean","variance","gt"])
+        # load rasters
+        rgb = loadRaster(img_path, bands=[4,3,2], transpose_order=(1,2,0), clip_range=(100, 2000), islice=islice, jslice=jslice)
+        gt = loadRaster(gt_path, bands=variable_index, islice=islice, jslice=jslice, set_nan_mask=True)
+        if variable_index in [3,5]: gt /= 100 # Cover/Dens normalization!!
+        mean = loadRaster(mean_path, bands=variable_index, islice=islice, jslice=jslice)
+        predictive_std = loadRaster(variance_path, bands=variable_index, islice=islice, jslice=jslice, elementwise_fn=np.sqrt)
+        # if normalize:
+        #     # get stats
+        #     rgbmax, rgbmin = np.nanmax(rgb, axis=(0,1)), np.nanmin(rgb, axis=(0,1))
+        #     gtmax, gtmin = np.nanmax(gt), np.nanmin(gt)
+        #     variancemax, variancemin = np.nanmax(variance), np.nanmin(variance)
+        #     # apply
+        #     rgb = norm2d(rgb, rgbmin, rgbmax)
+        #     gt = norm2d(gt, gtmin, gtmax)
+        #     mean = norm2d(mean, gtmin, gtmax)
+        #     # variance = norm2d(variance, variancemin, variancemax)
+        #     variance = norm2d(variance, gtmin**2, gtmax**2)
         if normalize:
-            # get stats
-            rgbmax, rgbmin = np.nanmax(rgb, axis=(0,1)), np.nanmin(rgb, axis=(0,1))
-            gtmax, gtmin = np.nanmax(gt), np.nanmin(gt)
-            variancemax, variancemin = np.nanmax(variance), np.nanmin(variance)
-            # apply
-            rgb = norm2d(rgb, rgbmin, rgbmax)
-            gt = norm2d(gt, gtmin, gtmax)
-            mean = norm2d(mean, gtmin, gtmax)
-            # variance = norm2d(variance, variancemin, variancemax)
-            variance = norm2d(variance, gtmin**2, gtmax**2)
+            gt, mean, predictive_std = multiNorm2d(gt, mean, predictive_std)
+            vmin, vmax = 0, 1
+        else:
+            vmin, vmax = multiMinMax(gt, mean, predictive_std)
+        dvmin, dvmax = vmin-vmax, vmax-vmin
         rerror = mean-gt
-        cerror = np.abs(rerror)-np.sqrt(variance)
+        cerror = np.abs(rerror)-predictive_std
         axs[i,0].imshow(rgb)
         if i ==0: axs[i,0].set_title(f"RGB")
-        sns.heatmap(gt, ax=axs[i,1], 
-            vmin=0, vmax=1,
-            # vmin=min(np.nanmin(mean), np.nanmean(gt)), 
-            # vmax=max(np.nanmax(mean), np.nanmax(gt))
-        )
+        sns.heatmap(gt, ax=axs[i,1], vmin=vmin, vmax=vmax)
         if i==0: axs[i,1].set_title(f"gt ({gt_date.strftime('%d.%m.%Y')})")
-        # break
-        sns.heatmap(mean, ax=axs[i,2], 
-            vmin=0, vmax=1,
-            # vmin=min(np.nanmin(mean), np.nanmean(gt)), 
-            # vmax=max(np.nanmax(mean), np.nanmax(gt))
-        )
+        sns.heatmap(mean, ax=axs[i,2], vmin=vmin, vmax=vmax)
         if i==0: axs[i,2].set_title(f"mean")
-        sns.heatmap(variance, ax=axs[i,3], vmin=np.nanmin(variance), vmax=np.nanmax(variance))
-        if i==0: axs[i,3].set_title(f"variance")
-        sns.heatmap(rerror, ax=axs[i,4], cmap="bwr", vmin=-1, vmax=1)
+        sns.heatmap(variance, ax=axs[i,3], vmin=vmin, vmax=vmax)
+        if i==0: axs[i,3].set_title(f"PU")
+        sns.heatmap(rerror, ax=axs[i,4], cmap="bwr", vmin=dvmin, dvmax)
         if i==0: axs[i,4].set_title(f"r-error")
-        sns.heatmap(cerror, ax=axs[i,5], cmap="bwr", vmin=-1, vmax=1)
+        sns.heatmap(cerror, ax=axs[i,5], cmap="bwr", vmin=2*dvmin, vmax=2*dvmax)
         if i==0: axs[i,5].set_title(f"c-error")
     for ax in axs.flatten(): 
         ax.set_xticks([])
@@ -632,47 +650,35 @@ def showPredictionMaps(dirs, titles, variable_index, variable_name, s2repr_dirs,
     plt.show()
 
 def showPredictionHistograms(dirs, titles, variable_index, variable_name,
-                           gt_dir, shapefile_paths, log_mean=False, log_variance=False,
-                           islice=None, jslice=None,
+                           gt_dir, shapefile_paths, log_mean=False, log_uncertainty=False,
+                           islice=None, jslice=None, normalize=False,
                            save_name=None, figsize=(10, 15)):
     fig, axs = plt.subplots(nrows=len(titles), ncols=2, figsize=figsize)
     for i, d in enumerate(dirs):
         dir_name = d.split("/")[-1]
         pid = dir_name.split("_")[0]
-        mean_path = Path(os.path.join(d, f"{pid}_mean.tif"))
-        variance_path = Path(os.path.join(d, f"{pid}_variance.tif"))
-        gt_path = os.path.join(gt_dir, f"{pid}.tif")
         gt_date = compute_gt_date(pid, shapefile_paths)
-        with rasterio.open(gt_path) as f:
-            gt = f.read(variable_index)
-            gt_mask = f.read_masks(1)//255
-            gt[gt_mask==0]=np.nan
-            if variable_index in [3,5]: gt /= 100 # Cover/Dens normalization!!
-            if islice is not None: gt = gt[islice]
-            if jslice is not None: gt = gt[:,jslice]
-        with rasterio.open(mean_path) as f:
-            mean = f.read(variable_index)
-            if islice is not None: mean = mean[islice]
-            if jslice is not None: mean = mean[:,jslice]
-        with rasterio.open(variance_path) as f:
-            variance = f.read(variable_index)
-            if islice is not None: variance = variance[islice]
-            if jslice is not None: variance = variance[:,jslice]
+        mean_path, variance_path, gt_path = getPaths(d, gt_dir, returns=["mean","variance","gt"])
+        # load rasters
+        gt = loadRaster(gt_path, bands=variable_index, islice=islice, jslice=jslice, set_nan_mask=True)
+        if variable_index in [3,5]: gt /= 100 # Cover/Dens normalization!!
+        mean = loadRaster(mean_path, bands=variable_index, islice=islice, jslice=jslice)
+        predictive_std = loadRaster(variance_path, bands=variable_index, islice=islice, jslice=jslice, elementwise_fn=np.sqrt)
         km = "mean" if not log_mean else "log mean"
         mdf = pd.DataFrame({
             "source": [f"gt ({gt_date.strftime('%d.%m.%Y')})" for _ in gt.flatten()]+
                       [f'prediction ({datetime.strptime(Path(d).name.split("_")[1].split("T")[0], "%Y%m%d").strftime("%d.%m.%Y")})' for _ in mean.flatten()],
             km: gt.flatten().tolist()+mean.flatten().tolist()
         })
-        kv = "variance" if not log_variance else "log variance"
+        kv = "predictive uncertainty" if not log_variance else "log predictive uncertainty"
         vdf = pd.DataFrame({
             "source": ["prediction" for _ in variance.flatten()],
             kv: variance.flatten().tolist()
         })
-        axs[i,0] = sns.histplot(data=mdf, x=km, hue="source", ax=axs[i,0])
+        axs[i,0] = sns.histplot(data=mdf, x=km, hue="source", ax=axs[i,0], multiple="dodge")
         sns.move_legend(axs[i,0], "upper center", ncol=2, title="", fontsize="small", bbox_to_anchor=(0.5,1.15))
         if log_mean: axs[i,0].set_xscale("log")
-        sns.histplot(data=vdf, x=kv, ax=axs[i,1])
+        sns.histplot(data=vdf, x=kv, ax=axs[i,1], multiple="dodge")
         # axs[i,1].set_title(titles[i])
         axs[i,1].set_ylabel("")
         if log_variance: axs[i,1].set_xscale("log")
@@ -689,28 +695,14 @@ def showErrorHistograms(dirs, titles, variable_index, variable_name,
                            save_name=None, figsize=(10,15)):
     fig, axs = plt.subplots(nrows=len(titles), ncols=2, figsize=figsize)
     for i, d in enumerate(dirs):
-        dir_name = d.split("/")[-1]
-        pid = dir_name.split("_")[0]
-        mean_path = Path(os.path.join(d, f"{pid}_mean.tif"))
-        variance_path = Path(os.path.join(d, f"{pid}_variance.tif"))
-        gt_path = os.path.join(gt_dir, f"{pid}.tif")
-        with rasterio.open(gt_path) as f:
-            gt = f.read(variable_index)
-            gt_mask = f.read_masks(1)//255
-            gt[gt_mask==0]=np.nan
-            if variable_index in [3,5]: gt /= 100 # Cover/Dens normalization!!
-            if islice is not None: gt = gt[islice]
-            if jslice is not None: gt = gt[:,jslice]
-        with rasterio.open(mean_path) as f:
-            mean = f.read(variable_index)
-            if islice is not None: mean = mean[islice]
-            if jslice is not None: mean = mean[:,jslice]
-        with rasterio.open(variance_path) as f:
-            variance = f.read(variable_index)
-            if islice is not None: variance = variance[islice]
-            if jslice is not None: variance = variance[:,jslice]
+        mean_path, variance_path, gt_path = getPaths(d, gt_dir, returns=["mean","variance","gt"])
+        # load rasters
+        gt = loadRaster(gt_path, bands=variable_index, islice=islice, jslice=jslice, set_nan_mask=True)
+        if variable_index in [3,5]: gt /= 100 # Cover/Dens normalization!!
+        mean = loadRaster(mean_path, bands=variable_index, islice=islice, jslice=jslice)
+        predictive_std = loadRaster(variance_path, bands=variable_index, islice=islice, jslice=jslice, elementwise_fn=np.sqrt)
         rerror = mean-gt
-        cerror = np.sqrt(rerror**2)-np.sqrt(variance)
+        cerror = np.abs(rerror)-predictive_std
         rk = "r-error" if not log_rerror else "log r-error"
         rdf = pd.DataFrame({
             "source": ["prediction" for _ in rerror.flatten()],
@@ -721,10 +713,10 @@ def showErrorHistograms(dirs, titles, variable_index, variable_name,
             "source": ["prediction" for _ in cerror.flatten()],
             ck: cerror.flatten().tolist()
         })
-        sns.histplot(data=rdf, x=rk, ax=axs[i,0])
+        sns.histplot(data=rdf, x=rk, ax=axs[i,0], multiple="dodge")
         # axs[i,0].set_title(titles[i])
         if log_rerror: axs[i,0].set_xscale("log")
-        sns.histplot(data=cdf, x=ck, ax=axs[i,1])
+        sns.histplot(data=cdf, x=ck, ax=axs[i,1], multiple="dodge")
         # axs[i,1].set_title(titles[i])
         axs[i,1].set_ylabel("")
         if log_cerror: axs[i,1].set_xscale("log")
@@ -739,65 +731,33 @@ def showSinglePredictionMaps(dir_, title, variable_index, variable_name, s2repr_
                                 islice=None, jslice=None, normalize=False, save_name=None,
                                 figsize=(15,2.5)):
     fig, axs = plt.subplots(nrows=1, ncols=6, figsize=figsize)
-    dir_name = dir_.split("/")[-1]
-    pid = dir_name.split("_")[0]
-    img_path = list(Path(os.path.join(s2repr_dirs, dir_name, pid)).glob("*.tif"))[0]
-    mean_path = Path(os.path.join(dir_, f"{pid}_mean.tif"))
-    variance_path = Path(os.path.join(dir_, f"{pid}_variance.tif"))
-    gt_path = os.path.join(gt_dir, f"{pid}.tif")
-    with rasterio.open(img_path) as f:
-        rgb = f.read([4,3,2])
-        rgb = clip(rgb, (100, 2000))
-        rgb = rgb.transpose(1,2,0)
-        if islice is not None: rgb = rgb[islice]
-        if jslice is not None: rgb = rgb[:,jslice]
-    with rasterio.open(gt_path) as f:
-        gt = f.read(variable_index)
-        gt_mask = f.read_masks(1)//255
-        gt[gt_mask==0]=np.nan
-        if variable_index in [3,5]: gt /= 100 # Cover/Dens normalization!!
-        if islice is not None: gt = gt[islice]
-        if jslice is not None: gt = gt[:,jslice]
-    with rasterio.open(mean_path) as f:
-        mean = f.read(variable_index)
-        if islice is not None: mean = mean[islice]
-        if jslice is not None: mean = mean[:,jslice]
-    with rasterio.open(variance_path) as f:
-        variance = f.read(variable_index)
-        if islice is not None: variance = variance[islice]
-        if jslice is not None: variance = variance[:,jslice]
+    d = dir_
+    img_path, mean_path, variance_path, gt_path = getPaths(d, s2repr_dirs, gt_dir, returns=["img","mean","variance","gt"])
+    # load rasters
+    rgb = loadRaster(img_path, bands=[4,3,2], transpose_order=(1,2,0), islice=islice, jslice=jslice)
+    gt = loadRaster(gt_path, bands=variable_index, islice=islice, jslice=jslice, set_nan_mask=True)
+    if variable_index in [3,5]: gt /= 100 # Cover/Dens normalization!!
+    mean = loadRaster(mean_path, bands=variable_index, islice=islice, jslice=jslice)
+    predictive_std = loadRaster(variance_path, bands=variable_index, islice=islice, jslice=jslice, elementwise_fn=np.sqrt)
     if normalize:
-        # get stats
-        rgbmax, rgbmin = np.nanmax(rgb, axis=(0,1)), np.nanmin(rgb, axis=(0,1))
-        gtmax, gtmin = np.nanmax(gt), np.nanmin(gt)
-        variancemax, variancemin = np.nanmax(variance), np.nanmin(variance)
-        # apply
-        rgb = norm2d(rgb, rgbmin, rgbmax)
-        gt = norm2d(gt, gtmin, gtmax)
-        mean = norm2d(mean, gtmin, gtmax)
-        variance = norm2d(variance, gtmin**2, gtmax**2)
+        gt, mean, predictive_std = multiNorm2d(gt, mean, predictive_std)
+        vmin, vmax = 0, 1
+    else:
+        vmin, vmax = multiMinMax(gt, mean, predictive_std)
     rerror = mean-gt
-    cerror = np.abs(rerror)-np.sqrt(variance)
+    cerror = np.abs(rerror)-predictive_std
     axs[0].imshow(rgb)
     axs[0].set_title(f"rgb")
-    sns.heatmap(gt, ax=axs[1], 
-        vmin=0, vmax=1,
-        # vmin=min(np.nanmin(mean), np.nanmean(gt)), 
-        # vmax=max(np.nanmax(mean), np.nanmax(gt))
-    )
+    sns.heatmap(gt, ax=axs[1], vmin=vmin, vmax=vmax)
     axs[1].set_title(f"gt")
     # break
-    sns.heatmap(mean, ax=axs[2], 
-        vmin=0, vmax=1,
-        # vmin=min(np.nanmin(mean), np.nanmean(gt)), 
-        # vmax=max(np.nanmax(mean), np.nanmax(gt))
-    )
+    sns.heatmap(mean, ax=axs[2], vmin=vmin, vmax=vmax)
     axs[2].set_title(f"mean")
-    sns.heatmap(variance, ax=axs[3], vmin=np.nanmin(variance), vmax=np.nanmax(variance))
-    axs[3].set_title(f"variance")
-    sns.heatmap(rerror, ax=axs[4], cmap="bwr", vmin=-1, vmax=1)
+    sns.heatmap(predictive_std, ax=axs[3], vmin=vmin, vmax=vmax)
+    axs[3].set_title(f"PU")
+    sns.heatmap(rerror, ax=axs[4], cmap="bwr", vmin=dvmin, vmax=dvmax)
     axs[4].set_title(f"r-error")
-    sns.heatmap(cerror, ax=axs[5], cmap="bwr", vmin=-1, vmax=1)
+    sns.heatmap(cerror, ax=axs[5], cmap="bwr", vmin=2*dvmin, vmax=2*dvmax)
     axs[5].set_title(f"c-error")
     for ax in axs.flatten(): ax.set_axis_off()
     fig.suptitle(f"{variable_name} - {title}")
@@ -807,34 +767,36 @@ def showSinglePredictionMaps(dir_, title, variable_index, variable_name, s2repr_
     
 def CompareMapsStats(matching_dirs, variable_names, split_mask=None, split=None):
     mean_stats = {"variable": [], "stat": [], "original": [], "gee": [], "delta": [], "relative delta (%)": []}
-    variance_stats = {"variable": [], "stat": [], "original": [], "gee": [], "delta": [], "relative delta (%)": []}
+    pu_stats = {"variable": [], "stat": [], "original": [], "gee": [], "delta": [], "relative delta (%)": []}
     if split_mask is not None or split is not None: 
         assert split_mask is not None and split is not None
         split_ = split
         split = ["train", "val", "test"].index(split)
         mean_stats["split"] = []
-        variance_stats["split"] = []    
+        pu_stats["split"] = []    
     for i, (orig_dir, gee_dir) in enumerate(matching_dirs):
-        pid = gee_dir.name.split("_")[0]
+        # paths
+        gee_mean_path, gee_variance_path = getPaths(gee_dir, returns=["mean", "variance"])
+        orig_mean_path, orig_variance_path = getPaths(orig_dir, returns=["mean", "variance"])
         # means
-        with rasterio.open(os.path.join(gee_dir, f"{pid}_mean.tif")) as f:
-            n = f.count
-            gee_mean = f.read(f.indexes)
-            if split_mask is not None: gee_mean = gee_mean[:,split_mask==split]
-            else: gee_mean = gee_mean.reshape(gee_mean.shape[0], -1)
-        with rasterio.open(os.path.join(orig_dir, f"{pid}_mean.tif")) as f:
-            orig_mean = f.read(f.indexes)
-            if split_mask is not None: orig_mean = orig_mean[:,split_mask==split]
-            else: orig_mean = orig_mean.reshape(orig_mean.shape[0], -1)
-        with rasterio.open(os.path.join(gee_dir, f"{pid}_variance.tif")) as f:
-            gee_variance = f.read(f.indexes)
-            if split_mask is not None: gee_variance = gee_variance[:,split_mask==split]
-            else: gee_variance = gee_variance.reshape(gee_variance.shape[0], -1)
-        with rasterio.open(os.path.join(orig_dir, f"{pid}_variance.tif")) as f:
-            orig_variance = f.read(f.indexes)
-            if split_mask is not None: orig_variance = orig_variance[:,split_mask==split]
-            else: orig_variance = orig_variance.reshape(orig_variance.shape[0], -1)
-        for f, fn in zip([np.nanmin, np.nanmax, np.nanmean, np.nanstd, np.nanmedian], 
+        gee_mean = loadRaster(gee_mean_path)
+        orig_mean = loadRaster(orig_mean_path)
+        # variances
+        gee_predictive_std = loadRaster(gee_variance_path, elementwise_fn=np.sqrt)
+        orig_predictive_std = loadRaster(orig_variance_path, elementwise_fn=np.sqrt)
+        n = gee_mean.shape[0]
+        # select split
+        if split_mask is not None: 
+            gee_mean = gee_mean[:,split_mask==split]
+            orig_mean = orig_mean[:,split_mask==split]
+            gee_predictive_std = gee_predictive_std[:,split_mask==split]
+            orig_predictive_std = orig_predictive_std[:,split_mask==split]
+        else: 
+            gee_mean = gee_mean.reshape(n, -1)
+            orig_mean = orig_mean.reshape(n, -1)
+            gee_predictive_std = gee_predictive_std.reshape(n, -1)
+            orig_predictive_std = orig_predictive_std.reshape(n, -1)
+        for f, fn in zip([np.nanmin, np.nanmax, np.nanmean, np.nanmedian, np.nanstd], 
                          ["min", "max", "mean", "median", "std"]):
             # mean
             mean_stats["variable"].extend(variable_names)
@@ -848,34 +810,30 @@ def CompareMapsStats(matching_dirs, variable_names, split_mask=None, split=None)
             if split is not None:
                 mean_stats["split"].extend([split_ for _ in range(1, n+1)])
             # variance
-            variance_stats["variable"].extend(variable_names)
-            variance_stats["stat"].extend([fn for _ in range(1, n+1)])
-            variance_stats["original"].extend(f(orig_variance, axis=1).tolist())
-            variance_stats["gee"].extend(f(gee_variance, axis=1).tolist())
-            variance_stats["delta"].extend((f(gee_variance, axis=1)-f(orig_variance, axis=1)).tolist())
-            variance_stats["relative delta (%)"].extend(
-                ((f(gee_variance, axis=1)-f(orig_variance, axis=1))/f(orig_variance, axis=1)*100).tolist()
+            pu_stats["variable"].extend(variable_names)
+            pu_stats["stat"].extend([fn for _ in range(1, n+1)])
+            pu_stats["original"].extend(f(orig_predictive_std, axis=1).tolist())
+            pu_stats["gee"].extend(f(gee_predictive_std, axis=1).tolist())
+            pu_stats["delta"].extend((f(gee_predictive_std, axis=1)-f(orig_predictive_std, axis=1)).tolist())
+            pu_stats["relative delta (%)"].extend(
+                ((f(gee_predictive_std, axis=1)-f(orig_predictive_std, axis=1))/f(orig_predictive_std, axis=1)*100).tolist()
             )
             if split is not None:
-                variance_stats["split"].extend([split_ for _ in range(1, n+1)])
-        return pd.DataFrame(mean_stats), pd.DataFrame(variance_stats)
+                pu_stats["split"].extend([split_ for _ in range(1, n+1)])
+        return pd.DataFrame(mean_stats), pd.DataFrame(pu_stats)
     
 def evaluateSplit(prediction_dir, gt_dir, split_mask, split):
     split_id = ["train", "val", "test"].index(split)
     # Load data
-    vpath = list(Path(prediction_dir).glob("*_variance.tif"))[0]
-    project = vpath.stem.split("_")[0]
-    with rasterio.open(vpath) as f:
-        variance = f.read(f.indexes)
-        variance[:,split_mask!=split_id] = np.nan
-    with rasterio.open(os.path.join(prediction_dir, f"{project}_mean.tif")) as f:
-        mean = f.read(f.indexes)
-        mean[:,split_mask!=split_id] = np.nan
-    with rasterio.open(os.path.join(gt_dir, f"{project}.tif")) as f:
-        gt = f.read(f.indexes)
-        gt[:,split_mask!=split_id] = np.nan
-        gt[2] /= 100 # Cover/Dens normalization!!
-        gt[4] /= 100
+    variance_path, mean_path, gt_path = getPaths(prediction_dir, gt_dir, returns=["variance", "mean", "gt"])
+    variance = loadRaster(variance_path)
+    mean = loadRaster(mean_path)
+    gt = loadRaster(gt_path)
+    variance[:,split_mask!=split_id] = np.nan
+    mean[:,split_mask!=split_id] = np.nan
+    gt[:,split_mask!=split_id] = np.nan
+    gt[2] /= 100 # Cover/Dens normalization!!
+    gt[4] /= 100
     rcu = StratifiedRCU(
         num_variables=variance.shape[0],
         num_groups=1,
@@ -973,7 +931,6 @@ def plotTrainTestMetricsDataFrames(train_df, test_df, type="bar", save_name=None
 
 def getUsabilityData(
     dirs,
-    s2repr_dirs,
     gt_dir,
     num_variables,
     variance_bounds=None, # used to discard distribution tail
@@ -990,33 +947,13 @@ def getUsabilityData(
     cps, variances, rerrors, cerrors = tuple([[] for _ in range(num_variables)] for _ in range(4))
     for dir_ in dirs:
         # paths
-        dir_name = dir_.split("/")[-1]
-        pid = dir_name.split("_")[0]
-        gt_path = Path(os.path.join(gt_dir, f"{pid}.tif"))
-        variance_path = Path(os.path.join(dir_, f"{pid}_variance.tif"))
-        mean_path = Path(os.path.join(dir_, f"{pid}_mean.tif"))
-        img_path = list(Path(os.path.join(s2repr_dirs, dir_name, pid)).glob("*.tif"))[0]
-        # read data
-        with rasterio.open(gt_path) as f:
-            gt = f.read(f.indexes).astype("float")
-            gt_mask = f.read_masks(1)//255
-            gt[2] /= 100
-            gt[4] /= 100
-            if islice is not None: gt = gt[:,islice]
-            if jslice is not None: gt = gt[:,:,jslice]
-        with rasterio.open(img_path) as f:
-            cp = f.read(f.count).astype("float")
-            if islice is not None: cp = cp[islice]
-            if jslice is not None: cp = cp[:,jslice]
-        with rasterio.open(variance_path) as f:
-            variance = f.read(f.indexes).astype("float")
-            if islice is not None: variance = variance[:,islice]
-            if jslice is not None: variance = variance[:,:,jslice]
-        with rasterio.open(mean_path) as f:
-            mean = f.read(f.indexes).astype("float")   
-            if islice is not None: mean = mean[:,islice]
-            if jslice is not None: mean = mean[:,:,jslice]
-        del gt_mask
+        mean_path, variance_path, gt_path = getPaths(dir_, gt_dir, returns=["mean","variance","gt"])
+        # load rasters
+        gt = loadRaster(gt_path, islice=islice, jslice=jslice, set_nan_mask=True)
+        gt[2] /= 100
+        gt[4] /= 100
+        mean = loadRaster(mean_path, islice=islice, jslice=jslice)
+        variance = loadRaster(variance_path, islice=islice, jslice=jslice)
         # compute valid mask
         cps_list, variances_list, rerrors_list, cerrors_list = [], [], [], []
         for i in range(mean.shape[0]):
@@ -1108,7 +1045,7 @@ def showMetricsCloudRepartition(
     if save_name is not None: savefigure(fig, save_name)
     plt.show()
     
-def showVarianceCloudRepartition(
+def showPredictiveUncertaintyCloudRepartition(
     cps,
     variances,
     variable_names,
@@ -1120,7 +1057,7 @@ def showVarianceCloudRepartition(
     fig, axs = plt.subplots(nrows=len(variable_names), ncols=1, figsize=figsize)
     for i, variable_name in enumerate(variable_names):
         cp = cps[i]
-        variance = variances[i]
+        predictive_std = np.sqrt(variances[i])
         str_bins = [f"[{bins[i]}, {bins[i+1]})" for i in range(len(bins)-1)]+[f"[{bins[-1]}, 100]"]
         # compute bin assignments
         bin_ids = np.digitize(cp, bins=np.array(bins))-1
@@ -1131,13 +1068,13 @@ def showVarianceCloudRepartition(
         sample_size = min(bin_counts)
         # dataframe
         df = pd.DataFrame({
-            "variance": variance,
+            "pu": predictive_std,
             "cloud probability": binned_cp,
         })
         # plot
         sns.histplot(
             data=df, 
-            x="variance",
+            x="pu",
             hue="cloud probability",
             multiple="fill",
             bins=8,
@@ -1146,7 +1083,7 @@ def showVarianceCloudRepartition(
             common_norm=True,
             ax=axs[i]
         )
-        axs[i].set_xlabel(f"{variable_name} variance")
+        axs[i].set_xlabel(f"{variable_name} predictive uncertainty")
         axs[i].set_ylabel("Density")
     fig.tight_layout()
     if save_name is not None: savefigure(fig, save_name)
@@ -1164,23 +1101,14 @@ def getCloudlessVisualizer(
     rcus = []
     for dir_ in dirs:
         # paths
-        dir_name = dir_.split("/")[-1]
-        pid = dir_name.split("_")[0]
-        gt_path = Path(os.path.join(gt_dir, f"{pid}.tif"))
-        variance_path = Path(os.path.join(dir_, f"{pid}_variance.tif"))
-        mean_path = Path(os.path.join(dir_, f"{pid}_mean.tif"))
-        img_path = list(Path(os.path.join(s2repr_dirs, dir_name, pid)).glob("*.tif"))[0]
+        img_path, mean_path, variance_path, gt_path = getPaths(dir_, s2repr_dirs, gt_dir, returns=["img","mean","variance","gt"])
         # read data
-        with rasterio.open(gt_path) as f:
-            gt = f.read(f.indexes).astype("float")
-            gt[2] /= 100
-            gt[4] /= 100
-        with rasterio.open(img_path) as f:
-            cp = f.read(f.count).astype("float")
-        with rasterio.open(variance_path) as f:
-            variance = f.read(f.indexes).astype("float")
-        with rasterio.open(mean_path) as f:
-            mean = f.read(f.indexes).astype("float")   
+        gt = loadRaster(gt_path, dtype="float")
+        gt[2] /= 100
+        gt[4] /= 100
+        cp = loadRaster(gt_path, bands=-1, dtype="float")
+        mean = loadRaster(mean_path, dtype="float")
+        variance = loadRaster(variance_path, dtype="float")
         # Mask out clouds according to threshold
         cmask = cp>cloudy_pixel_threshold
         gt[:,cmask] = np.nan
