@@ -263,7 +263,8 @@ def getPaths(
         else:
             retuple.append(os.path.join(src_dir, f"{pid}_{r}.tif"))
         assert os.path.exists(retuple[-1])
-    return tuple(retuple)
+    if len(returns) > 1: return tuple(retuple)
+    else: return retuple[0]
 
 def loadRaster(
     path,
@@ -279,6 +280,7 @@ def loadRaster(
     with rasterio.open(path) as f:
         if bands is None: bands = f.indexes
         if bands == -1: bands = f.count
+        if isinstance(bands, tuple): bands = list(bands)
         x = f.read(bands)
         if set_nan_mask:
             mask = f.read_masks(1)
@@ -289,7 +291,7 @@ def loadRaster(
         if jslice is not None:
             if isinstance(bands, list): x = x[:,:,jslice]
             else: x = x[:,jslice]
-        if clip_range is not None: x = clp(x, clip_range)
+        if clip_range is not None: x = clip(x, clip_range)
         if transpose_order is not None: x = x.transpose(*transpose_order)
         if dtype is not None: x = x.astype(dtype)
         if elementwise_fn is not None: x = elementwise_fn(x)
@@ -312,7 +314,7 @@ def norm2d(x, mn=None, mx=None, a=0, b=1):
     return (b-a)*(x-mn)/(mx-mn)+a
 
 def multiNorm2d(*sources, a=0, b=1, axis=None, return_bounds=False):
-    mn, mx = multiMinMax(*source, axis)
+    mn, mx = multiMinMax(*sources, axis)
     res = [norm2d(source, mn, mx, a, b) for source in sources]
     if return_bounds: return tuple([res]+[min, mx])
     else: return tuple(res)
@@ -327,23 +329,30 @@ def filterZeroAvgCp(result_dirs, s2repr_dirs):
     nnz_result_dirs = []
     for result_dir in result_dirs:
         img_path = getPaths(result_dir, s2repr_dirs, returns=["img"])
-        mean = loadRaster(img_path, bands=-1, dtype="float")
+        mean = loadRaster(img_path, bands=-1, dtype="float").mean()
         if mean != 0.:
             exp_vars.append(mean)
             nnz_result_dirs.append(result_dir)
     return exp_vars, nnz_result_dirs
 
-def get_nonzero_avg_cp_visualizer(result_dirs, s2repr_dirs, variable_names, max_n, bins):
+def get_nonzero_avg_cp_visualizer(result_dirs, s2repr_dirs, variable_names, max_n=None, bins=None):
     exp_vars, nnz_result_dirs = filterZeroAvgCp(result_dirs, s2repr_dirs)
-    bin_ids = np.digitize(exp_vars, bins=bins)-1
-    selected_exp_vars, selected_nnz_result_dirs = [], []
-    for bin_id in np.unique(bin_ids):
-        bin_exp_vars = [exp_vars[i] for i in range(len(exp_vars)) if bin_ids[i]==bin_id]
-        bin_nnz_result_dirs = [nnz_result_dirs[i] for i in range(len(nnz_result_dirs)) if bin_ids[i]==bin_id]
-        assert len(bin_exp_vars)==len(bin_nnz_result_dirs)
-        print(f"bin {bin_id}: {len(bin_exp_vars)} results")
-        selected_exp_vars.extend(bin_exp_vars[:max_n//(len(bins)-1)])
-        selected_nnz_result_dirs.extend(bin_nnz_result_dirs[:max_n//(len(bins)-1)])
+    if bins is not None:
+        bin_ids = np.digitize(exp_vars, bins=bins)-1
+        selected_exp_vars, selected_nnz_result_dirs = [], []
+        for bin_id in np.unique(bin_ids):
+            bin_exp_vars = [exp_vars[i] for i in range(len(exp_vars)) if bin_ids[i]==bin_id]
+            bin_nnz_result_dirs = [nnz_result_dirs[i] for i in range(len(nnz_result_dirs)) if bin_ids[i]==bin_id]
+            assert len(bin_exp_vars)==len(bin_nnz_result_dirs)
+            print(f"bin {bin_id}: {len(bin_exp_vars)} results")
+            if max_n is not None:
+                selected_exp_vars.extend(bin_exp_vars[:max_n//(len(bins)-1)])
+                selected_nnz_result_dirs.extend(bin_nnz_result_dirs[:max_n//(len(bins)-1)])
+            else:
+                selected_exp_vars.extend(bin_exp_vars)
+                selected_nnz_result_dirs.extend(bin_nnz_result_dirs)
+    else:
+        selected_exp_vars, selected_nnz_result_dirs = exp_vars, nnz_result_dirs
     print(f"selected {len(selected_exp_vars)} results.")
     # Create visualizer object
     visualizer = ExperimentVisualizer.from_paths(
@@ -479,23 +488,25 @@ def showPairedMaps(matching_dirs, variable_index, variable_name, islice=None, js
         dvmin, dvmax = vmin-vmax, vmax-vmin
         meandiff = gee_mean-orig_mean
         predictive_stddiff = gee_predictive_std-orig_predictive_std
+        mbound = np.nanmax(np.abs(meandiff))
+        pbound = np.nanmax(np.abs(predictive_stddiff))
         sns.heatmap(orig_mean, ax=axs[i,0], vmin=vmin, vmax=vmax)
         if i==0: axs[i,0].set_title(f"original mean")
         sns.heatmap(gee_mean, ax=axs[i,1], vmin=vmin, vmax=vmax)
         if i==0: axs[i,1].set_title(f"gee mean")
-        sns.heatmap(meandiff, ax=axs[i,2], cmap="bwr", vmin=dvmin, vmax=dvmax)
+        sns.heatmap(meandiff, ax=axs[i,2], cmap="bwr", vmin=-mbound, vmax=mbound)
         if i==0: axs[i,2].set_title(f"difference mean")
-        sns.heatmap(orig_variance, ax=axs[i,3], vmin=vmin, vmax=vmax)
+        sns.heatmap(orig_predictive_std, ax=axs[i,3], vmin=vmin, vmax=vmax)
         if i == 0: axs[i,3].set_title(f"original PU")
-        sns.heatmap(gee_variance, ax=axs[i,4], vmin=vmin, vmax=vmax)
+        sns.heatmap(gee_predictive_std, ax=axs[i,4], vmin=vmin, vmax=vmax)
         if i == 0: axs[i,4].set_title(f"gee PU")
-        sns.heatmap(predictive_stddiffdiff, ax=axs[i,5], cmap="bwr", vmin=dvmin, vmax=dvmax)
+        sns.heatmap(predictive_stddiff, ax=axs[i,5], cmap="bwr", vmin=-pbound, vmax=pbound)
         if i == 0: axs[i,5].set_title(f"difference PU")
     for ax in axs.flatten(): 
         ax.set_xticks([])
         ax.set_yticks([])
     for i, (d, _) in enumerate(matching_dirs):
-        axs[i,0].set_ylabel(datetime.strptime(d.name.split("_")[1].split("T")[0], '%Y%m%d').strftime("%d.%m.%Y"))
+        axs[i,0].set_ylabel(datetime.strptime(Path(d).name.split("_")[1].split("T")[0], '%Y%m%d').strftime("%d.%m.%Y"))
     fig.suptitle(variable_name)
     plt.tight_layout()
     if save_name is not None: savefigure(fig, save_name)
@@ -528,13 +539,13 @@ def showPairedHistograms(matching_dirs, variable_index, variable_name, islice=No
             "source": ["original" for _ in orig_predictive_std]+["gee" for _ in gee_predictive_std],
             kv: orig_predictive_std.tolist()+gee_predictive_std.tolist()
         })
-        sns.histplot(data=mdf, x=km, hue="source", ax=axs[i,0], multiple="dodge")
-        axs[i,0].set_title(datetime.strptime(orig_dir.name.split("_")[1].split("T")[0], '%Y%m%d').strftime("%d.%m.%Y"))
+        sns.histplot(data=mdf, x=km, hue="source", ax=axs[i,0], multiple="dodge", bins=20)
+        axs[i,0].set_title(datetime.strptime(Path(orig_dir).name.split("_")[1].split("T")[0], '%Y%m%d').strftime("%d.%m.%Y"))
         if log_mean: axs[i,0].set_xscale("log")
-        sns.histplot(data=vdf, x=kv, hue="source", ax=axs[i,1], multiple="dodge")
-        axs[i,1].set_title(datetime.strptime(orig_dir.name.split("_")[1].split("T")[0], '%Y%m%d').strftime("%d.%m.%Y"))
+        sns.histplot(data=vdf, x=kv, hue="source", ax=axs[i,1], multiple="dodge", bins=20)
+        axs[i,1].set_title(datetime.strptime(Path(orig_dir).name.split("_")[1].split("T")[0], '%Y%m%d').strftime("%d.%m.%Y"))
         axs[i,1].set_ylabel("")
-        if log_variance: axs[i,1].set_xscale("log")
+        if log_uncertainty: axs[i,1].set_xscale("log")
         axs[i,0].get_legend().remove()
         axs[i,1].get_legend().remove()
     fig.suptitle(variable_name)
@@ -570,17 +581,18 @@ def showMeanDifferenceMaps(orig_path, gee_path,
         O = orig_mean[islice,jslice].copy()
         G = gee_mean[islice,jslice].copy()
         if normalize:
-            orig_mean, gee_mean, orig_predictive_std, gee_predictive_std = multiNorm2d(orig_mean, gee_mean, orig_predictive_std, gee_predictive_std)
+            O, G = multiNorm2d(O, G)
             vmin, vmax = 0, 1
         else:
-            vmin, vmax = multiMinMax(orig_mean, gee_mean, orig_predictive_std, gee_predictive_std)
+            vmin, vmax = multiMinMax(O, G)
         dvmin, dvmax = vmin-vmax, vmax-vmin
         rerror = G-O
+        rbound = np.nanmax(np.abs(rerror))
         sns.heatmap(
             rerror,
             cmap="bwr",
-            vmin=dvmin, 
-            vmax=dvmax,
+            vmin=-rbound, 
+            vmax=rbound,
             ax=ax
         )
         ax.set_xticks([])
@@ -592,9 +604,79 @@ def showMeanDifferenceMaps(orig_path, gee_path,
     plt.tight_layout()
     if save_name is not None: savefigure(fig, save_name)
     plt.show()
+
+def showUncertaintyTypes(dirs, titles, variable_index, variable_name, s2repr_dirs,
+                         islice=None, jslice=None, normalize=False, 
+                         save_name=None, figsize=(15,10)):
+    fig, axs = plt.subplots(nrows=len(titles), ncols=4, figsize=figsize)
+    for i, d in enumerate(dirs):
+        img_path, variance_path, aleatoric_path, epistemic_path = getPaths(
+            d, s2repr_dirs, 
+            returns=["img","variance","aleatoric", "epistemic"]
+        )
+        # load rasters
+        rgb = loadRaster(img_path, bands=[4,3,2], transpose_order=(1,2,0), clip_range=(100, 2000), islice=islice, jslice=jslice)
+        predictive_std = loadRaster(variance_path, bands=variable_index, islice=islice, jslice=jslice, elementwise_fn=np.sqrt)
+        aleatoric_std = loadRaster(aleatoric_path, bands=variable_index, islice=islice, jslice=jslice, elementwise_fn=np.sqrt)
+        epistemic_std = loadRaster(epistemic_path, bands=variable_index, islice=islice, jslice=jslice, elementwise_fn=np.sqrt)
+        if normalize:
+            predictive_std, aleatoric_std, epistemic_std = multiNorm2d(predictive_std, aleatoric_std, epistemic_std)
+            vmin, vmax = 0, 1
+        else:
+            vmin, vmax = multiMinMax(predictive_std, aleatoric_std, epistemic_std)
+        axs[i,0].imshow(rgb)
+        if i ==0: axs[i,0].set_title(f"RGB")
+        sns.heatmap(epistemic_std, ax=axs[i,1], vmin=vmin, vmax=vmax)
+        if i==0: axs[i,1].set_title(f"epistemic")
+        sns.heatmap(aleatoric_std, ax=axs[i,2], vmin=vmin, vmax=vmax)
+        if i==0: axs[i,2].set_title(f"aleatoric")
+        sns.heatmap(predictive_std, ax=axs[i,3], vmin=vmin, vmax=vmax)
+        if i==0: axs[i,3].set_title(f"predictive")
+    for ax in axs.flatten(): 
+        ax.set_xticks([])
+        ax.set_yticks([])
+    for i, d, in enumerate(dirs):
+        axs[i,0].set_ylabel(f'{titles[i]}')
+    fig.suptitle(variable_name)
+    plt.tight_layout()
+    if save_name is not None: savefigure(fig, save_name)
+    plt.show()
+
+def precomputeCbarBounds(
+    dirs,
+    s2repr_dirs,
+    gt_dir,
+    variable_names,
+    islice=None,
+    jslice=None
+):
+    # initialize
+    predictive_uncertainty_bounds = ([np.inf for _ in variable_names], [-np.inf for _ in variable_names])
+    rerror_bounds = [np.inf for _ in variable_names]
+    cerror_bounds = [np.inf for _ in variable_names]
+    # loop on dirs
+    for d in dirs:
+        mean_path, variance_path, gt_path = getPaths(
+            d, gt_dir=gt_dir, s2repr_dirs=s2repr_dirs, returns=["mean", "variance", "gt"]
+        )
+        gt = loadRaster(gt_path, bands=None, islice=islice, jslice=jslice)
+        mean = loadRaster(mean_path, bands=None, islice=islice, jslice=jslice)
+        predictive_std = loadRaster(variance_path, bands=None, islice=islice, jslice=jslice, elementwise_fn=np.sqrt)
+        absrerror = np.abs(mean-gt)
+        abscerror = np.abs(absrerror-predictive_std)
+        # update bounds
+        for i, _ in enumerate(variable_names):
+            pb0, pb1 = np.nanmin(predictive_std[i]), np.nanmax(predictive_std[i])
+            rb, cb = np.nanmax(absrerror), np.nanmax(abscerror)
+            if pb0 < predictive_uncertainty_bounds[0][i]: predictive_uncertainty_bounds[0][i] = pb0
+            if pb1 > predictive_uncertainty_bounds[1][i]: predictive_uncertainty_bounds[1][i] = pb1
+            if rb > rerror_bounds[i]: rerror_bounds[i] = rb
+            if cb > cerror_bounds[i]: cerror_bounds[i] = cb
+    return predictive_uncertainty_bounds, rerror_bounds, cerror_bounds
     
 def showPredictionMaps(dirs, titles, variable_index, variable_name, s2repr_dirs, gt_dir, 
                         shapefile_paths, islice=None, jslice=None, normalize=False, save_name=None,
+                        predictive_uncertainty_bounds=None, rerror_bounds=None, cerror_bounds=None,
                         figsize=(15,10)):
     fig, axs = plt.subplots(nrows=len(titles), ncols=6, figsize=figsize)
     for i, d in enumerate(dirs):
@@ -627,17 +709,20 @@ def showPredictionMaps(dirs, titles, variable_index, variable_name, s2repr_dirs,
         dvmin, dvmax = vmin-vmax, vmax-vmin
         rerror = mean-gt
         cerror = np.abs(rerror)-predictive_std
+        pubounds = (vmin, vmax) if predictive_uncertainty_bounds is None else (predictive_uncertainty_bounds[0][variable_index-1], predictive_uncertainty_bounds[1][variable_index-1])
+        rbound = np.nanmax(np.abs(rerror)) if rerror_bounds is None else rerror_bounds[variable_index-1]
+        cbound = np.nanmax(np.abs(cerror)) if cerror_bounds is None else cerror_bounds[variable_index-1]
         axs[i,0].imshow(rgb)
         if i ==0: axs[i,0].set_title(f"RGB")
         sns.heatmap(gt, ax=axs[i,1], vmin=vmin, vmax=vmax)
         if i==0: axs[i,1].set_title(f"gt ({gt_date.strftime('%d.%m.%Y')})")
         sns.heatmap(mean, ax=axs[i,2], vmin=vmin, vmax=vmax)
         if i==0: axs[i,2].set_title(f"mean")
-        sns.heatmap(variance, ax=axs[i,3], vmin=vmin, vmax=vmax)
+        sns.heatmap(predictive_std, ax=axs[i,3], vmin=pubounds[0], vmax=pubounds[1])
         if i==0: axs[i,3].set_title(f"PU")
-        sns.heatmap(rerror, ax=axs[i,4], cmap="bwr", vmin=dvmin, dvmax)
+        sns.heatmap(rerror, ax=axs[i,4], cmap="bwr", vmin=-rbound, vmax=rbound)
         if i==0: axs[i,4].set_title(f"r-error")
-        sns.heatmap(cerror, ax=axs[i,5], cmap="bwr", vmin=2*dvmin, vmax=2*dvmax)
+        sns.heatmap(cerror, ax=axs[i,5], cmap="bwr", vmin=-cbound, vmax=cbound)
         if i==0: axs[i,5].set_title(f"c-error")
     for ax in axs.flatten(): 
         ax.set_xticks([])
@@ -658,30 +743,32 @@ def showPredictionHistograms(dirs, titles, variable_index, variable_name,
         dir_name = d.split("/")[-1]
         pid = dir_name.split("_")[0]
         gt_date = compute_gt_date(pid, shapefile_paths)
-        mean_path, variance_path, gt_path = getPaths(d, gt_dir, returns=["mean","variance","gt"])
+        mean_path, variance_path, gt_path = getPaths(d, gt_dir=gt_dir, returns=["mean","variance","gt"])
         # load rasters
         gt = loadRaster(gt_path, bands=variable_index, islice=islice, jslice=jslice, set_nan_mask=True)
         if variable_index in [3,5]: gt /= 100 # Cover/Dens normalization!!
         mean = loadRaster(mean_path, bands=variable_index, islice=islice, jslice=jslice)
         predictive_std = loadRaster(variance_path, bands=variable_index, islice=islice, jslice=jslice, elementwise_fn=np.sqrt)
+        if normalize:
+            gt, mean, predictive_std = multiNorm2d(gt, mean, predictive_std)
         km = "mean" if not log_mean else "log mean"
         mdf = pd.DataFrame({
             "source": [f"gt ({gt_date.strftime('%d.%m.%Y')})" for _ in gt.flatten()]+
                       [f'prediction ({datetime.strptime(Path(d).name.split("_")[1].split("T")[0], "%Y%m%d").strftime("%d.%m.%Y")})' for _ in mean.flatten()],
             km: gt.flatten().tolist()+mean.flatten().tolist()
         })
-        kv = "predictive uncertainty" if not log_variance else "log predictive uncertainty"
+        kv = "predictive uncertainty" if not log_uncertainty else "log predictive uncertainty"
         vdf = pd.DataFrame({
-            "source": ["prediction" for _ in variance.flatten()],
-            kv: variance.flatten().tolist()
+            "source": ["prediction" for _ in predictive_std.flatten()],
+            kv: predictive_std.flatten().tolist()
         })
-        axs[i,0] = sns.histplot(data=mdf, x=km, hue="source", ax=axs[i,0], multiple="dodge")
+        axs[i,0] = sns.histplot(data=mdf, x=km, hue="source", ax=axs[i,0], multiple="dodge", bins=20)
         sns.move_legend(axs[i,0], "upper center", ncol=2, title="", fontsize="small", bbox_to_anchor=(0.5,1.15))
         if log_mean: axs[i,0].set_xscale("log")
-        sns.histplot(data=vdf, x=kv, ax=axs[i,1], multiple="dodge")
+        sns.histplot(data=vdf, x=kv, ax=axs[i,1], multiple="dodge", bins=20)
         # axs[i,1].set_title(titles[i])
         axs[i,1].set_ylabel("")
-        if log_variance: axs[i,1].set_xscale("log")
+        if log_uncertainty: axs[i,1].set_xscale("log")
     for i, d, in enumerate(dirs):
         axs[i,0].set_ylabel(f'{titles[i]}\nCount')
     fig.suptitle(variable_name)
@@ -691,16 +778,18 @@ def showPredictionHistograms(dirs, titles, variable_index, variable_name,
 
 def showErrorHistograms(dirs, titles, variable_index, variable_name,
                            gt_dir, log_rerror=False, log_cerror=False, 
-                           islice=None, jslice=None,
+                           islice=None, jslice=None, normalize=False,
                            save_name=None, figsize=(10,15)):
     fig, axs = plt.subplots(nrows=len(titles), ncols=2, figsize=figsize)
     for i, d in enumerate(dirs):
-        mean_path, variance_path, gt_path = getPaths(d, gt_dir, returns=["mean","variance","gt"])
+        mean_path, variance_path, gt_path = getPaths(d, gt_dir=gt_dir, returns=["mean","variance","gt"])
         # load rasters
         gt = loadRaster(gt_path, bands=variable_index, islice=islice, jslice=jslice, set_nan_mask=True)
         if variable_index in [3,5]: gt /= 100 # Cover/Dens normalization!!
         mean = loadRaster(mean_path, bands=variable_index, islice=islice, jslice=jslice)
         predictive_std = loadRaster(variance_path, bands=variable_index, islice=islice, jslice=jslice, elementwise_fn=np.sqrt)
+        if normalize:
+            gt, mean, predictive_std = multiNorm2d(gt, mean, predictive_std)
         rerror = mean-gt
         cerror = np.abs(rerror)-predictive_std
         rk = "r-error" if not log_rerror else "log r-error"
@@ -713,10 +802,10 @@ def showErrorHistograms(dirs, titles, variable_index, variable_name,
             "source": ["prediction" for _ in cerror.flatten()],
             ck: cerror.flatten().tolist()
         })
-        sns.histplot(data=rdf, x=rk, ax=axs[i,0], multiple="dodge")
+        sns.histplot(data=rdf, x=rk, ax=axs[i,0], multiple="dodge", bins=20)
         # axs[i,0].set_title(titles[i])
         if log_rerror: axs[i,0].set_xscale("log")
-        sns.histplot(data=cdf, x=ck, ax=axs[i,1], multiple="dodge")
+        sns.histplot(data=cdf, x=ck, ax=axs[i,1], multiple="dodge", bins=20)
         # axs[i,1].set_title(titles[i])
         axs[i,1].set_ylabel("")
         if log_cerror: axs[i,1].set_xscale("log")
@@ -744,8 +833,11 @@ def showSinglePredictionMaps(dir_, title, variable_index, variable_name, s2repr_
         vmin, vmax = 0, 1
     else:
         vmin, vmax = multiMinMax(gt, mean, predictive_std)
+    dvmin, dvmax = vmin-vmax, vmax-vmin
     rerror = mean-gt
     cerror = np.abs(rerror)-predictive_std
+    rbound = np.nanmax(np.abs(rerror))
+    cbound = np.nanmax(np.abs(cerror))
     axs[0].imshow(rgb)
     axs[0].set_title(f"rgb")
     sns.heatmap(gt, ax=axs[1], vmin=vmin, vmax=vmax)
@@ -753,11 +845,11 @@ def showSinglePredictionMaps(dir_, title, variable_index, variable_name, s2repr_
     # break
     sns.heatmap(mean, ax=axs[2], vmin=vmin, vmax=vmax)
     axs[2].set_title(f"mean")
-    sns.heatmap(predictive_std, ax=axs[3], vmin=vmin, vmax=vmax)
+    sns.heatmap(predictive_std, ax=axs[3], vmin=np.nanmin(predictive_std), vmax=np.nanmax(predictive_std))
     axs[3].set_title(f"PU")
-    sns.heatmap(rerror, ax=axs[4], cmap="bwr", vmin=dvmin, vmax=dvmax)
+    sns.heatmap(rerror, ax=axs[4], cmap="bwr", vmin=-rbound, vmax=rbound)
     axs[4].set_title(f"r-error")
-    sns.heatmap(cerror, ax=axs[5], cmap="bwr", vmin=2*dvmin, vmax=2*dvmax)
+    sns.heatmap(cerror, ax=axs[5], cmap="bwr", vmin=-cbound, vmax=cbound)
     axs[5].set_title(f"c-error")
     for ax in axs.flatten(): ax.set_axis_off()
     fig.suptitle(f"{variable_name} - {title}")
@@ -823,9 +915,11 @@ def CompareMapsStats(matching_dirs, variable_names, split_mask=None, split=None)
         return pd.DataFrame(mean_stats), pd.DataFrame(pu_stats)
     
 def evaluateSplit(prediction_dir, gt_dir, split_mask, split):
+    dir_name = prediction_dir.split("/")[-1]
+    pid = dir_name.split("_")[0]
     split_id = ["train", "val", "test"].index(split)
     # Load data
-    variance_path, mean_path, gt_path = getPaths(prediction_dir, gt_dir, returns=["variance", "mean", "gt"])
+    variance_path, mean_path, gt_path = getPaths(prediction_dir, gt_dir=gt_dir, returns=["variance", "mean", "gt"])
     variance = loadRaster(variance_path)
     mean = loadRaster(mean_path)
     gt = loadRaster(gt_path)
@@ -841,7 +935,7 @@ def evaluateSplit(prediction_dir, gt_dir, split_mask, split):
         lo_variance=np.nanmin(variance, axis=(1,2)),
         hi_variance=np.nanmax(variance, axis=(1,2)),
     )
-    rcu.add_project(project, gt, mean, variance)
+    rcu.add_project(pid, gt, mean, variance)
     return rcu
     
 def loadMetricsDataFrame(matching_dirs, metrics=["mse", "ence", "auce", "cv"], 
@@ -880,7 +974,7 @@ def loadMetricsDataFrame(matching_dirs, metrics=["mse", "ence", "auce", "cv"],
             assert gt.variable==ot.variable
             data["metric"].extend([gt.metric, ot.metric])
             data["variable"].extend([gt.variable, ot.variable])
-            data["imageId"].extend([gee_dir.name, orig_dir.name])
+            data["imageId"].extend([Path(gee_dir).name, Path(orig_dir).name])
             data["source"].extend(["gee", "original"])
             data["x"].extend([gt.x, ot.x])
             if split: data["split"].extend([split, split])
@@ -929,8 +1023,46 @@ def plotTrainTestMetricsDataFrames(train_df, test_df, type="bar", save_name=None
     if save_name is not None: savefigure(fig, save_name)
     plt.show()
 
+def showCloudVsUncertaintyType(
+    dirs,
+    s2repr_dirs,
+    variable_names,
+    figsize=(12,18),
+    save_name=None
+):
+    nv = len(variable_names)
+    fig, axs = plt.subplots(ncols=2, nrows=math.ceil(nv/2), figsize=figsize)
+    axs = axs.flatten()
+    # load data and plot by variable
+    for i, variable_name in enumerate(variable_names):
+        aleatorics, epistemics = np.empty((0)), np.empty((0)) # (N)
+        cps = np.empty((0)) # (N)
+        for d in dirs:
+            aleatoric_path, epistemic_path, img_path = getPaths(
+                d, s2repr_dirs=s2repr_dirs, returns=["aleatoric", "epistemic", "img"]
+            )
+            aleatoric = loadRaster(aleatoric_path, bands=i+1, dtype="float").reshape(-1)
+            epistemic = loadRaster(epistemic_path, bands=i+1, dtype="float").reshape(-1)
+            cp = loadRaster(img_path, bands=-1, dtype="float").reshape(-1)
+            # accumulate
+            aleatorics = np.concatenate([aleatorics, aleatoric], axis=0)
+            epistemics = np.concatenate([epistemics, epistemic], axis=0)
+            cps = np.concatenate([cps, cp], axis=0)
+        df = pd.DataFrame({
+            "cloud probability":np.concatenate([cps, cps], axis=0),
+            "uncertainty":np.concatenate([aleatorics, epistemics], axis=0),
+            "type":["aleatoric" for _ in range(len(aleatorics))]+["epistmic" for _ in range(len(epistemics))]
+        })
+        sns.lineplot(data=df, x="cloud probability", y="uncertainty", hue="type", ax=axs[i])
+        axs[i].set_title(variable_name)
+    if nv%2!=0: fig.delaxes(axs.flatten()[-1])
+    plt.tight_layout()
+    if save_name is not None: savefigure(fig, save_name)
+    plt.show()
+
 def getUsabilityData(
     dirs,
+    s2repr_dirs,
     gt_dir,
     num_variables,
     variance_bounds=None, # used to discard distribution tail
@@ -947,13 +1079,14 @@ def getUsabilityData(
     cps, variances, rerrors, cerrors = tuple([[] for _ in range(num_variables)] for _ in range(4))
     for dir_ in dirs:
         # paths
-        mean_path, variance_path, gt_path = getPaths(dir_, gt_dir, returns=["mean","variance","gt"])
+        mean_path, variance_path, gt_path, img_path = getPaths(dir_, s2repr_dirs, gt_dir, returns=["mean","variance","gt", "img"])
         # load rasters
         gt = loadRaster(gt_path, islice=islice, jslice=jslice, set_nan_mask=True)
         gt[2] /= 100
         gt[4] /= 100
         mean = loadRaster(mean_path, islice=islice, jslice=jslice)
         variance = loadRaster(variance_path, islice=islice, jslice=jslice)
+        cp = loadRaster(img_path, bands=-1, islice=islice, jslice=jslice)
         # compute valid mask
         cps_list, variances_list, rerrors_list, cerrors_list = [], [], [], []
         for i in range(mean.shape[0]):
@@ -1100,13 +1233,15 @@ def getCloudlessVisualizer(
 ):
     rcus = []
     for dir_ in dirs:
+        dir_name = dir_.split("/")[-1]
+        pid = dir_name.split("_")[0]
         # paths
         img_path, mean_path, variance_path, gt_path = getPaths(dir_, s2repr_dirs, gt_dir, returns=["img","mean","variance","gt"])
         # read data
         gt = loadRaster(gt_path, dtype="float")
         gt[2] /= 100
         gt[4] /= 100
-        cp = loadRaster(gt_path, bands=-1, dtype="float")
+        cp = loadRaster(img_path, bands=-1, dtype="float")
         mean = loadRaster(mean_path, dtype="float")
         variance = loadRaster(variance_path, dtype="float")
         # Mask out clouds according to threshold
