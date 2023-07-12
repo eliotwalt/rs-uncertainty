@@ -7,6 +7,7 @@ from matplotlib.colors import LogNorm
 import tempfile
 import math
 import json
+from tqdm import tqdm
 import os
 import seaborn as sns
 import rasterio
@@ -149,11 +150,11 @@ class ExperimentVisualizer():
         vmdf = vmdf.query(f"metric == '{metric}' & variable == '{variable}'")
         gvmdf = vmdf.query("group=='global'")
         if exp_var_bins is None:
-            sns.boxplot(data=gvmdf, y="x", ax=ax)
+            sns.boxplot(data=gvmdf, y="x", ax=ax, showfliers=False)
         else:
             bin_strings = [f"{exp_var_bins[i]}-{exp_var_bins[i+1]}" for i in range(len(exp_var_bins)-1)]
             gvmdf.loc[:,self.exp_var_name] = [bin_strings[i-1] for i in np.digitize(gvmdf[self.exp_var_name].values, bins=exp_var_bins)]
-            sns.boxplot(data=gvmdf, y="x", x=self.exp_var_name, ax=ax, order=bin_strings)
+            sns.boxplot(data=gvmdf, y="x", x=self.exp_var_name, ax=ax, order=bin_strings, showfliers=False)
         ax.set_ylabel(metric)
         return ax
 
@@ -284,7 +285,8 @@ def loadRaster(
         x = f.read(bands)
         if set_nan_mask:
             mask = f.read_masks(1)
-            x[mask==0] = np.nan
+            if isinstance(bands, list): x[:,mask==0] = np.nan
+            else: x[mask==0] = np.nan
         if islice is not None:
             if isinstance(bands, list): x = x[:,islice]
             else: x = x[islice]
@@ -330,7 +332,7 @@ def filterZeroAvgCp(result_dirs, s2repr_dirs):
     for result_dir in result_dirs:
         img_path = getPaths(result_dir, s2repr_dirs, returns=["img"])
         mean = loadRaster(img_path, bands=-1, dtype="float").mean()
-        if mean != 0.:
+        if mean != 0. and mean != 100.:
             exp_vars.append(mean)
             nnz_result_dirs.append(result_dir)
     return exp_vars, nnz_result_dirs
@@ -541,11 +543,11 @@ def showPairedHistograms(matching_dirs, variable_index, variable_name, islice=No
         })
         sns.histplot(data=mdf, x=km, hue="source", ax=axs[i,0], multiple="dodge", bins=20)
         axs[i,0].set_title(datetime.strptime(Path(orig_dir).name.split("_")[1].split("T")[0], '%Y%m%d').strftime("%d.%m.%Y"))
-        if log_mean: axs[i,0].set_xscale("log")
+        if log_mean: axs[i,0].set_yscale("log")
         sns.histplot(data=vdf, x=kv, hue="source", ax=axs[i,1], multiple="dodge", bins=20)
         axs[i,1].set_title(datetime.strptime(Path(orig_dir).name.split("_")[1].split("T")[0], '%Y%m%d').strftime("%d.%m.%Y"))
         axs[i,1].set_ylabel("")
-        if log_uncertainty: axs[i,1].set_xscale("log")
+        if log_uncertainty: axs[i,1].set_yscale("log")
         axs[i,0].get_legend().remove()
         axs[i,1].get_legend().remove()
     fig.suptitle(variable_name)
@@ -605,10 +607,41 @@ def showMeanDifferenceMaps(orig_path, gee_path,
     if save_name is not None: savefigure(fig, save_name)
     plt.show()
 
+def precomputeCbarBoundsUncetaintyTypes(
+    dirs, s2repr_dirs, variable_names, islice=None, jslice=None, quantile=90,
+):
+    std_bounds = ([np.inf for _ in variable_names], [-np.inf for _ in variable_names])
+    epistemic_diff_bounds = [-np.inf for _ in variable_names]
+    aleatoric_diff_bounds = [-np.inf for _ in variable_names]
+    first_aleatoric, first_epistemic = None, None
+    for i, d in enumerate(dirs):
+        aleatoric_path, epistemic_path = getPaths(d, s2repr_dirs=s2repr_dirs, returns=["aleatoric", "epistemic"])
+        aleatoric = loadRaster(aleatoric_path, bands=None, islice=islice, jslice=jslice, elementwise_fn=np.sqrt)
+        epistemic = loadRaster(epistemic_path, bands=None, islice=islice, jslice=jslice, elementwise_fn=np.sqrt)
+        predictive = aleatoric + epistemic
+        if i==0:
+            aleadiff = aleatoric-aleatoric
+            first_aleatoric = aleatoric.copy()
+            epidiff = epistemic-epistemic
+            first_epistemic = epistemic.copy()
+        else:
+            aleadiff = aleatoric - first_aleatoric
+            epidiff = epistemic - first_epistemic
+        for i, _ in enumerate(variable_names):
+            pmn, pmx = np.nanmin(predictive[i]), np.nanmax(predictive[i])
+            ab, eb = np.nanpercentile(np.abs(aleadiff), q=quantile), np.nanpercentile(np.abs(epidiff), q=quantile)
+            if pmn < std_bounds[0][i]: std_bounds[0][i] = pmn
+            if pmx > std_bounds[1][i]: std_bounds[1][i] = pmx
+            if ab > aleatoric_diff_bounds[i]: aleatoric_diff_bounds[i] = ab
+            if eb > epistemic_diff_bounds[i]: epistemic_diff_bounds[i] = eb
+    return std_bounds, aleatoric_diff_bounds, epistemic_diff_bounds
+
 def showUncertaintyTypes(dirs, titles, variable_index, variable_name, s2repr_dirs,
                          islice=None, jslice=None, normalize=False, 
-                         save_name=None, figsize=(15,10)):
-    fig, axs = plt.subplots(nrows=len(titles), ncols=4, figsize=figsize)
+                         std_bounds=None, epistemic_diff_bounds=None, aleatoric_diff_bounds=None,
+                         save_name=None, figsize=(15,7.5)):
+    fig, axs = plt.subplots(nrows=len(titles), ncols=6, figsize=figsize)
+    first_aleatoric_std, first_epistemic_std = None, None
     for i, d in enumerate(dirs):
         img_path, variance_path, aleatoric_path, epistemic_path = getPaths(
             d, s2repr_dirs, 
@@ -619,19 +652,34 @@ def showUncertaintyTypes(dirs, titles, variable_index, variable_name, s2repr_dir
         predictive_std = loadRaster(variance_path, bands=variable_index, islice=islice, jslice=jslice, elementwise_fn=np.sqrt)
         aleatoric_std = loadRaster(aleatoric_path, bands=variable_index, islice=islice, jslice=jslice, elementwise_fn=np.sqrt)
         epistemic_std = loadRaster(epistemic_path, bands=variable_index, islice=islice, jslice=jslice, elementwise_fn=np.sqrt)
+        if i==0: 
+            first_aleatoric_std = aleatoric_std
+            first_epistemic_std = epistemic_std
+        adiff = aleatoric_std - first_aleatoric_std
+        ediff = epistemic_std - first_epistemic_std
         if normalize:
             predictive_std, aleatoric_std, epistemic_std = multiNorm2d(predictive_std, aleatoric_std, epistemic_std)
             vmin, vmax = 0, 1
         else:
             vmin, vmax = multiMinMax(predictive_std, aleatoric_std, epistemic_std)
+        if std_bounds is None:
+            stdmin, stdmax = vmin, vmax
+        else:
+            stdmin, stdmax = std_bounds[0][variable_index-1], std_bounds[1][variable_index-1]        
+        adbound = aleatoric_diff_bounds[variable_index-1] if aleatoric_diff_bounds is not None else vmax
+        edbound = epistemic_diff_bounds[variable_index-1] if epistemic_diff_bounds is not None else vmax
         axs[i,0].imshow(rgb)
         if i ==0: axs[i,0].set_title(f"RGB")
-        sns.heatmap(epistemic_std, ax=axs[i,1], vmin=vmin, vmax=vmax)
+        sns.heatmap(epistemic_std, ax=axs[i,1], vmin=stdmin, vmax=stdmax)
         if i==0: axs[i,1].set_title(f"epistemic")
-        sns.heatmap(aleatoric_std, ax=axs[i,2], vmin=vmin, vmax=vmax)
+        sns.heatmap(aleatoric_std, ax=axs[i,2], vmin=stdmin, vmax=stdmax)
         if i==0: axs[i,2].set_title(f"aleatoric")
-        sns.heatmap(predictive_std, ax=axs[i,3], vmin=vmin, vmax=vmax)
+        sns.heatmap(predictive_std, ax=axs[i,3], vmin=stdmin, vmax=stdmax)
         if i==0: axs[i,3].set_title(f"predictive")
+        sns.heatmap(ediff, ax=axs[i,4], cmap="bwr", vmin=-edbound, vmax=edbound)
+        if i==0: axs[i,4].set_title(f"epistemic difference")
+        sns.heatmap(adiff, ax=axs[i,5], cmap="bwr", vmin=-adbound, vmax=adbound)
+        if i==0: axs[i,5].set_title(f"aleatoric difference")
     for ax in axs.flatten(): 
         ax.set_xticks([])
         ax.set_yticks([])
@@ -642,20 +690,21 @@ def showUncertaintyTypes(dirs, titles, variable_index, variable_name, s2repr_dir
     if save_name is not None: savefigure(fig, save_name)
     plt.show()
 
-def precomputeCbarBounds(
+def precomputeCbarBoundsPredictionMaps(
     dirs,
     s2repr_dirs,
     gt_dir,
     variable_names,
     islice=None,
-    jslice=None
+    jslice=None,
+    quantile=75,
 ):
     # initialize
-    predictive_uncertainty_bounds = ([np.inf for _ in variable_names], [-np.inf for _ in variable_names])
-    rerror_bounds = [np.inf for _ in variable_names]
-    cerror_bounds = [np.inf for _ in variable_names]
+    predictive_uncertainty_bounds = ([None for _ in variable_names], [None for _ in variable_names])
+    rerror_bounds = [None for _ in variable_names]
+    cerror_bounds = [None for _ in variable_names]
     # loop on dirs
-    for d in dirs:
+    for j, d in enumerate(dirs):
         mean_path, variance_path, gt_path = getPaths(
             d, gt_dir=gt_dir, s2repr_dirs=s2repr_dirs, returns=["mean", "variance", "gt"]
         )
@@ -667,17 +716,17 @@ def precomputeCbarBounds(
         # update bounds
         for i, _ in enumerate(variable_names):
             pb0, pb1 = np.nanmin(predictive_std[i]), np.nanmax(predictive_std[i])
-            rb, cb = np.nanmax(absrerror), np.nanmax(abscerror)
-            if pb0 < predictive_uncertainty_bounds[0][i]: predictive_uncertainty_bounds[0][i] = pb0
-            if pb1 > predictive_uncertainty_bounds[1][i]: predictive_uncertainty_bounds[1][i] = pb1
-            if rb > rerror_bounds[i]: rerror_bounds[i] = rb
-            if cb > cerror_bounds[i]: cerror_bounds[i] = cb
+            rb, cb = np.nanpercentile(absrerror, q=quantile), np.nanpercentile(abscerror, q=quantile)
+            if j==0 or pb0 < predictive_uncertainty_bounds[0][i]: predictive_uncertainty_bounds[0][i] = pb0
+            if j==0 or pb1 > predictive_uncertainty_bounds[1][i]: predictive_uncertainty_bounds[1][i] = pb1
+            if j==0 or rb > rerror_bounds[i]: rerror_bounds[i] = rb
+            if j==0 or cb > cerror_bounds[i]: cerror_bounds[i] = cb
     return predictive_uncertainty_bounds, rerror_bounds, cerror_bounds
     
 def showPredictionMaps(dirs, titles, variable_index, variable_name, s2repr_dirs, gt_dir, 
                         shapefile_paths, islice=None, jslice=None, normalize=False, save_name=None,
                         predictive_uncertainty_bounds=None, rerror_bounds=None, cerror_bounds=None,
-                        figsize=(15,10)):
+                        figsize=(15,7.5)):
     fig, axs = plt.subplots(nrows=len(titles), ncols=6, figsize=figsize)
     for i, d in enumerate(dirs):
         dir_name = d.split("/")[-1]
@@ -715,11 +764,11 @@ def showPredictionMaps(dirs, titles, variable_index, variable_name, s2repr_dirs,
         axs[i,0].imshow(rgb)
         if i ==0: axs[i,0].set_title(f"RGB")
         sns.heatmap(gt, ax=axs[i,1], vmin=vmin, vmax=vmax)
-        if i==0: axs[i,1].set_title(f"gt ({gt_date.strftime('%d.%m.%Y')})")
+        if i==0: axs[i,1].set_title(f"ground truth\n({gt_date.strftime('%d.%m.%Y')})")
         sns.heatmap(mean, ax=axs[i,2], vmin=vmin, vmax=vmax)
         if i==0: axs[i,2].set_title(f"mean")
         sns.heatmap(predictive_std, ax=axs[i,3], vmin=pubounds[0], vmax=pubounds[1])
-        if i==0: axs[i,3].set_title(f"PU")
+        if i==0: axs[i,3].set_title(f"predictive\nuncertainty")
         sns.heatmap(rerror, ax=axs[i,4], cmap="bwr", vmin=-rbound, vmax=rbound)
         if i==0: axs[i,4].set_title(f"r-error")
         sns.heatmap(cerror, ax=axs[i,5], cmap="bwr", vmin=-cbound, vmax=cbound)
@@ -728,7 +777,7 @@ def showPredictionMaps(dirs, titles, variable_index, variable_name, s2repr_dirs,
         ax.set_xticks([])
         ax.set_yticks([])
     for i, d, in enumerate(dirs):
-        axs[i,0].set_ylabel(f'{titles[i]} ({datetime.strptime(Path(d).name.split("_")[1].split("T")[0], "%Y%m%d").strftime("%d.%m.%Y")})')
+        axs[i,0].set_ylabel(f'{titles[i]}\n({datetime.strptime(Path(d).name.split("_")[1].split("T")[0], "%Y%m%d").strftime("%d.%m.%Y")})')
     fig.suptitle(variable_name)
     plt.tight_layout()
     if save_name is not None: savefigure(fig, save_name)
@@ -737,6 +786,7 @@ def showPredictionMaps(dirs, titles, variable_index, variable_name, s2repr_dirs,
 def showPredictionHistograms(dirs, titles, variable_index, variable_name,
                            gt_dir, shapefile_paths, log_mean=False, log_uncertainty=False,
                            islice=None, jslice=None, normalize=False,
+                           trainset_means=None,
                            save_name=None, figsize=(10, 15)):
     fig, axs = plt.subplots(nrows=len(titles), ncols=2, figsize=figsize)
     for i, d in enumerate(dirs):
@@ -751,24 +801,30 @@ def showPredictionHistograms(dirs, titles, variable_index, variable_name,
         predictive_std = loadRaster(variance_path, bands=variable_index, islice=islice, jslice=jslice, elementwise_fn=np.sqrt)
         if normalize:
             gt, mean, predictive_std = multiNorm2d(gt, mean, predictive_std)
-        km = "mean" if not log_mean else "log mean"
+        km = "mean"
+        if trainset_means is None:
+            gt_title = f"gt ({gt_date.strftime('%d.%m.%Y')})"
+            pred_title = f'prediction ({datetime.strptime(Path(d).name.split("_")[1].split("T")[0], "%Y%m%d").strftime("%d.%m.%Y")})'
+        else:
+            gt_title = f"gt (mean={trainset_means[variable_index-1]:.3f})"
+            pred_title = f'prediction (mean={np.nanmean(mean):.3f})'
         mdf = pd.DataFrame({
-            "source": [f"gt ({gt_date.strftime('%d.%m.%Y')})" for _ in gt.flatten()]+
-                      [f'prediction ({datetime.strptime(Path(d).name.split("_")[1].split("T")[0], "%Y%m%d").strftime("%d.%m.%Y")})' for _ in mean.flatten()],
+            "source": [gt_title for _ in gt.flatten()]+
+                      [pred_title for _ in mean.flatten()],
             km: gt.flatten().tolist()+mean.flatten().tolist()
         })
-        kv = "predictive uncertainty" if not log_uncertainty else "log predictive uncertainty"
+        kv = "predictive uncertainty"
         vdf = pd.DataFrame({
             "source": ["prediction" for _ in predictive_std.flatten()],
             kv: predictive_std.flatten().tolist()
         })
         axs[i,0] = sns.histplot(data=mdf, x=km, hue="source", ax=axs[i,0], multiple="dodge", bins=20)
         sns.move_legend(axs[i,0], "upper center", ncol=2, title="", fontsize="small", bbox_to_anchor=(0.5,1.15))
-        if log_mean: axs[i,0].set_xscale("log")
+        if log_mean: axs[i,0].set_yscale("log")
         sns.histplot(data=vdf, x=kv, ax=axs[i,1], multiple="dodge", bins=20)
         # axs[i,1].set_title(titles[i])
         axs[i,1].set_ylabel("")
-        if log_uncertainty: axs[i,1].set_xscale("log")
+        if log_uncertainty: axs[i,1].set_yscale("log")
     for i, d, in enumerate(dirs):
         axs[i,0].set_ylabel(f'{titles[i]}\nCount')
     fig.suptitle(variable_name)
@@ -815,6 +871,32 @@ def showErrorHistograms(dirs, titles, variable_index, variable_name,
     plt.tight_layout()
     if save_name is not None: savefigure(fig, save_name)
     plt.show()
+
+def makeConditionUncertaintyCoveragePlot(dirs, titles, variable_names, islice=None, jslice=None, figsize=(12,8), save_name=None):
+    df = {"variable": [], "condition": [], "prediction standard deviation": [], "mean predictive uncertainty": [], "mean standard deviation coverage (%)": []}
+    for j, d in enumerate(dirs):
+        mean_path, variance_path = getPaths(d, returns=["mean","variance"])
+        mean = loadRaster(mean_path, islice=islice, jslice=jslice)
+        pu = loadRaster(variance_path, islice=islice, jslice=jslice, elementwise_fn=np.sqrt)
+        pred_std = np.nanstd(mean, axis=(1,2))
+        mean_pu = np.nanmean(pu, axis=(1,2))
+        for i, variable_name in enumerate(variable_names):
+            df["variable"].append(variable_name)
+            df["condition"].append(titles[j])
+            df["prediction standard deviation"].append(pred_std[i])
+            df["mean predictive uncertainty"].append(mean_pu[i])
+            df["mean standard deviation coverage (%)"].append(mean_pu[i]/pred_std[i]*100)
+    df = pd.DataFrame(df)
+    fig = plt.figure(figsize=figsize)
+    sns.lineplot(
+        data=df,
+        x="condition",
+        y="mean standard deviation coverage (%)",
+        hue="variable"
+    )
+    plt.tight_layout()
+    if save_name is not None: savefigure(fig, save_name)
+    plt.show()
     
 def showSinglePredictionMaps(dir_, title, variable_index, variable_name, s2repr_dirs, gt_dir, 
                                 islice=None, jslice=None, normalize=False, save_name=None,
@@ -823,7 +905,7 @@ def showSinglePredictionMaps(dir_, title, variable_index, variable_name, s2repr_
     d = dir_
     img_path, mean_path, variance_path, gt_path = getPaths(d, s2repr_dirs, gt_dir, returns=["img","mean","variance","gt"])
     # load rasters
-    rgb = loadRaster(img_path, bands=[4,3,2], transpose_order=(1,2,0), islice=islice, jslice=jslice)
+    rgb = loadRaster(img_path, bands=[4,3,2], transpose_order=(1,2,0), clip_range=(100, 2000), islice=islice, jslice=jslice)
     gt = loadRaster(gt_path, bands=variable_index, islice=islice, jslice=jslice, set_nan_mask=True)
     if variable_index in [3,5]: gt /= 100 # Cover/Dens normalization!!
     mean = loadRaster(mean_path, bands=variable_index, islice=islice, jslice=jslice)
@@ -846,7 +928,7 @@ def showSinglePredictionMaps(dir_, title, variable_index, variable_name, s2repr_
     sns.heatmap(mean, ax=axs[2], vmin=vmin, vmax=vmax)
     axs[2].set_title(f"mean")
     sns.heatmap(predictive_std, ax=axs[3], vmin=np.nanmin(predictive_std), vmax=np.nanmax(predictive_std))
-    axs[3].set_title(f"PU")
+    axs[3].set_title(f"predictive\nuncertainty")
     sns.heatmap(rerror, ax=axs[4], cmap="bwr", vmin=-rbound, vmax=rbound)
     axs[4].set_title(f"r-error")
     sns.heatmap(cerror, ax=axs[5], cmap="bwr", vmin=-cbound, vmax=cbound)
@@ -1031,34 +1113,206 @@ def showCloudVsUncertaintyType(
     save_name=None
 ):
     nv = len(variable_names)
-    fig, axs = plt.subplots(ncols=2, nrows=math.ceil(nv/2), figsize=figsize)
-    axs = axs.flatten()
-    # load data and plot by variable
+    df = pd.DataFrame(
+        columns=["cp", "count", "average uncertainty", "uncertainty std", "type", "variable"])
+    # loop on directories
+    for i, d in enumerate(dirs):
+        # read data
+        aleatoric_path, epistemic_path, img_path = getPaths(
+            d, s2repr_dirs=s2repr_dirs, returns=["aleatoric", "epistemic", "img"]
+        )
+        aleatoric = loadRaster(aleatoric_path, dtype="float64", elementwise_fn=np.sqrt).reshape(nv, -1)
+        epistemic = loadRaster(epistemic_path, dtype="float64", elementwise_fn=np.sqrt).reshape(nv, -1)
+        cp = loadRaster(img_path, bands=-1, dtype="float").reshape(-1)
+        mask = np.bitwise_and(~np.isnan(aleatoric).all(0), ~np.isnan(epistemic).all(0))
+        aleatoric, epistemic, cp = aleatoric[:,mask], epistemic[:,mask], cp[mask]
+        tmp = {
+            "cp": [],
+            "count": [],
+            "average uncertainty": [],
+            "uncertainty std": [],
+            "type": [],
+            "variable": [],
+        }
+        for i, variable_name in enumerate(variable_names):
+            for array, array_type in zip([aleatoric[i], epistemic[i]], ["aleatoric", "epistemic"]):
+                tmp["cp"].extend(cp.tolist())
+                tmp["count"].extend(np.ones_like(cp).tolist())
+                tmp[f"average uncertainty"].extend(array.tolist())
+                tmp[f"uncertainty std"].extend((array**2).tolist())
+                tmp[f"type"].extend([array_type for _ in array])
+                tmp[f"variable"].extend([variable_name for _ in array])
+        tmp = pd.DataFrame(tmp)
+        tmp = tmp.groupby(["cp", "type", "variable"]).sum().reset_index()
+        df = pd.concat([df, tmp], axis=0)
+    df = df.groupby(["cp", "variable", "type"]).sum().reset_index()
+    df["average uncertainty"] /= df["count"]
+    df["uncertainty std"] /= df["count"]
+    df["uncertainty std"] = np.sqrt(df["uncertainty std"]-df["average uncertainty"]**2)
+    fig, axs = plt.subplots(ncols=3, nrows=nv, figsize=figsize)
     for i, variable_name in enumerate(variable_names):
-        aleatorics, epistemics = np.empty((0)), np.empty((0)) # (N)
-        cps = np.empty((0)) # (N)
-        for d in dirs:
-            aleatoric_path, epistemic_path, img_path = getPaths(
-                d, s2repr_dirs=s2repr_dirs, returns=["aleatoric", "epistemic", "img"]
-            )
-            aleatoric = loadRaster(aleatoric_path, bands=i+1, dtype="float").reshape(-1)
-            epistemic = loadRaster(epistemic_path, bands=i+1, dtype="float").reshape(-1)
-            cp = loadRaster(img_path, bands=-1, dtype="float").reshape(-1)
-            # accumulate
-            aleatorics = np.concatenate([aleatorics, aleatoric], axis=0)
-            epistemics = np.concatenate([epistemics, epistemic], axis=0)
-            cps = np.concatenate([cps, cp], axis=0)
-        df = pd.DataFrame({
-            "cloud probability":np.concatenate([cps, cps], axis=0),
-            "uncertainty":np.concatenate([aleatorics, epistemics], axis=0),
-            "type":["aleatoric" for _ in range(len(aleatorics))]+["epistmic" for _ in range(len(epistemics))]
-        })
-        sns.lineplot(data=df, x="cloud probability", y="uncertainty", hue="type", ax=axs[i])
-        axs[i].set_title(variable_name)
-    if nv%2!=0: fig.delaxes(axs.flatten()[-1])
+        sub = df.query(f"variable == '{variable_name}'")
+        sns.lineplot(data=sub, x="cp", y="average uncertainty", hue="type", ax=axs[i,0])
+        axs[i,0].fill_between(sub[sub.type=="aleatoric"].cp, 
+                        sub[sub.type=="aleatoric"]["average uncertainty"]-sub[sub.type=="aleatoric"]["uncertainty std"], 
+                        sub[sub.type=="aleatoric"]["average uncertainty"]+sub[sub.type=="aleatoric"]["uncertainty std"], 
+                        color="b",
+                        alpha=0.2)
+        axs[i,0].fill_between(sub[sub.type=="epistemic"].cp, 
+                        sub[sub.type=="epistemic"]["average uncertainty"]-sub[sub.type=="epistemic"]["uncertainty std"], 
+                        sub[sub.type=="epistemic"]["average uncertainty"]+sub[sub.type=="epistemic"]["uncertainty std"], 
+                        color="orange",
+                        alpha=0.2)
+        axs[i,0].set_ylabel(f"{variable_name}")
+        axs[i,0].set_xlabel(f"cloud probability")
+        if i==0: axs[i,0].set_title(f"average uncertainty")
+        if i==nv-1: axs[i,0].legend().set_title("")
+        else: axs[i,0].legend([],[],frameon=False)
+    for i, variable_name in enumerate(variable_names):
+        for utype in ["aleatoric", "epistemic"]:
+            sub = df.query(f"variable == '{variable_name}' & type == '{utype}'")
+            sub["uncertainty change"] = sub["average uncertainty"].values-sub["average uncertainty"].values[0]
+            c = "tab:orange" if utype=="epistemic" else "tab:blue"
+            axs[i,1].plot(sub.cp, sub["uncertainty change"], color=c, label=utype)
+        if i==nv-1: axs[i,1].legend()
+        axs[i,1].set_xlabel(f"cloud probability")
+        if i==0: axs[i,1].set_title(f"average uncertainty increase")
+    df["uncertainty_fraction"] = [None for _ in range(df.shape[0])]
+    total_avg_uncertainty = df.groupby(["variable", "cp"]).sum()["average uncertainty"].reset_index()
+    for i, variable_name in enumerate(variable_names):
+        for utype in ["aleatoric", "epistemic"]:
+            values = df.query(f"variable == '{variable_name}' & type == '{utype}'").sort_values("cp")
+            fracs = values["average uncertainty"].values / total_avg_uncertainty.query(f"variable == '{variable_name}'").sort_values("cp")["average uncertainty"].values
+            c = "tab:orange" if utype=="epistemic" else "tab:blue"
+            axs[i,2].plot(values.cp, fracs, color=c, label=utype)
+        axs[i,2].hlines(0.5, xmin=0, xmax=100, linestyle="dotted", color="black")
+        if i==nv-1: axs[i,2].legend()
+        axs[i,2].set_xlabel(f"cloud probability")
+        if i==0: axs[i,2].set_title(f"average uncertainty fraction")
     plt.tight_layout()
     if save_name is not None: savefigure(fig, save_name)
     plt.show()
+
+def showCloudVsPrediction(
+    dirs,
+    s2repr_dirs,
+    variable_names,
+    trainset_means,
+    islice=None,
+    jslice=None,
+    figsize=(12,18),
+    save_name=None
+):
+    nv = len(variable_names)
+    df = pd.DataFrame(
+        columns=["cp", "count", "average", "stddev", "variable"])
+    # loop on directories
+    for i, d in enumerate(dirs):
+        # read data
+        mean_path, img_path = getPaths(
+            d, s2repr_dirs=s2repr_dirs, returns=["mean", "img"]
+        )
+        mean = loadRaster(mean_path, dtype="float64", islice=islice, jslice=jslice).reshape(nv, -1)
+        cp = loadRaster(img_path, bands=-1, islice=islice, jslice=jslice, dtype="float").reshape(-1)
+        mask = ~np.isnan(mean).all(0)
+        mean, cp = mean[:,mask], cp[mask]
+        tmp = {
+            "cp": [],
+            "count": [],
+            "average": [],
+            "stddev": [],
+            "variable": [],
+        }
+        for i, variable_name in enumerate(variable_names):
+            tmp["cp"].extend(cp.tolist())
+            tmp["count"].extend(np.ones_like(cp).tolist())
+            tmp[f"average"].extend(mean[i].tolist())
+            tmp[f"stddev"].extend((mean[i]**2).tolist())
+            tmp[f"variable"].extend([variable_name for _ in mean[i]])
+        tmp = pd.DataFrame(tmp)
+        tmp = tmp.groupby(["cp", "variable"]).sum().reset_index()
+        df = pd.concat([df, tmp], axis=0)
+    df = df.groupby(["cp", "variable"]).sum().reset_index()
+    df["average"] /= df["count"]
+    df["stddev"] /= df["count"]
+    df["stddev"] = np.sqrt(df["stddev"]-df["average"]**2)
+    fig, axs = plt.subplots(ncols=2, nrows=3, figsize=figsize)
+    axs = axs.flatten()
+    for i, variable_name in enumerate(variable_names):
+        sub = df.query(f"variable == '{variable_name}'")
+        sns.lineplot(data=sub, x="cp", y="average", ax=axs[i])
+        axs[i].fill_between(sub.cp, sub.average-sub.stddev, sub.average+sub.stddev, alpha=0.2) 
+        axs[i].hlines(trainset_means[i], xmin=0, xmax=100, linestyle="dotted", color="black", label=f"train set mean ({trainset_means[i]:.3f})")
+        axs[i].set_ylabel("average prediction")
+        axs[i].set_xlabel(f"cloud probability")
+        axs[i].set_title(variable_name)
+        axs[i].legend()
+    fig.delaxes(axs.flatten()[-1])
+    plt.tight_layout()
+    if save_name is not None: savefigure(fig, save_name)
+    plt.show()
+
+def showCloudVsUncertaintyCoverage(
+    dirs,
+    s2repr_dirs,
+    variable_names,
+    trainset_stds,
+    islice=None,
+    jslice=None,
+    figsize=(12,8),
+    save_name=None
+):
+    nv = len(variable_names)
+    df = pd.DataFrame(
+        columns=["cp", "count", "average", "stddev", "variable"])
+    # loop on directories
+    for i, d in enumerate(dirs):
+        # read data
+        pu_path, img_path = getPaths(
+            d, s2repr_dirs=s2repr_dirs, returns=["variance", "img"]
+        )
+        pu = loadRaster(pu_path, dtype="float64", islice=islice, jslice=jslice, elementwise_fn=np.sqrt).reshape(nv, -1)
+        cp = loadRaster(img_path, bands=-1, islice=islice, jslice=jslice, dtype="float").reshape(-1)
+        mask = ~np.isnan(pu).all(0)
+        pu, cp = pu[:,mask], cp[mask]
+        tmp = {
+            "cp": [],
+            "count": [],
+            "average": [],
+            "stddev": [],
+            "variable": [],
+        }
+        for i, variable_name in enumerate(variable_names):
+            tmp["cp"].extend(cp.tolist())
+            tmp["count"].extend(np.ones_like(cp).tolist())
+            tmp[f"average"].extend(pu[i].tolist())
+            tmp[f"stddev"].extend((pu[i]**2).tolist())
+            tmp[f"variable"].extend([variable_name for _ in pu[i]])
+        tmp = pd.DataFrame(tmp)
+        tmp = tmp.groupby(["cp", "variable"]).sum().reset_index()
+        df = pd.concat([df, tmp], axis=0)
+    df = df.groupby(["cp", "variable"]).sum().reset_index()
+    df.loc[:,"average"] /= df["count"]
+    df.loc[:,"stddev"] /= df["count"]
+    df["stddev"] = np.sqrt(df["stddev"]-df["average"]**2)
+    fig = plt.figure(figsize=figsize)
+    ax = plt.gca()
+    colors = sns.color_palette()
+    for i, variable_name in enumerate(variable_names):
+        sub = df.query(f"variable == '{variable_name}'")
+        sub.loc[:,"average"] /= trainset_stds[i]
+        sub.loc[:,"stddev"] /= trainset_stds[i]
+        sub.loc[:,"average"] *= 100
+        sub.loc[:,"stddev"] *= 100
+        sns.lineplot(data=sub, x="cp", y="average", ax=ax, color=colors[i])
+        ax.fill_between(sub.cp, sub.average-sub.stddev, sub.average+sub.stddev, alpha=0.1, color=colors[i])
+        ax.set_ylabel("mean standard deviation coverage (%)")
+        ax.set_xlabel(f"cloud probability")
+        ax.set_title(variable_name)
+    plt.tight_layout()
+    if save_name is not None: savefigure(fig, save_name)
+    plt.show()
+    return df
 
 def getUsabilityData(
     dirs,
@@ -1515,3 +1769,4 @@ def cloudyCloudlessMetrics(
 #     if save_name is not None: savefigure(fig, save_name)
 #     plt.tight_layout()
 #     plt.show()
+
