@@ -461,6 +461,77 @@ def showRGB(dirs, s2repr_dirs, titles=None, islice=None, jslice=None, draw_bbox=
     if save_name is not None: savefigure(fig, save_name)
     plt.show()
 
+def showConditionCloudDistribution(
+    dirs,
+    titles,
+    s2repr_dirs,
+    islice=None,
+    jslice=None,
+    save_name=None
+):
+    fig, axs = plt.subplots(ncols=len(dirs), nrows=2, figsize=(12, 6))
+    for j, d in enumerate(dirs):
+        img_path = getPaths(d, s2repr_dirs=s2repr_dirs, returns=["img"])
+        cp_global = loadRaster(img_path, bands=-1, islice=None, jslice=None).flatten()
+        cp_sliced = loadRaster(img_path, bands=-1, islice=islice, jslice=jslice).flatten()
+        sns.histplot(x=cp_global, bins=15, binrange=(0,100), ax=axs[0,j])
+        axs[0,j].set_title(f"{titles[j]}\nmean={np.nanmean(cp_global):.3f}")
+        if j==0: axs[0,j].set_ylabel("Global\ncount")
+        else: axs[0,j].set_ylabel("")
+        axs[0,j].set_xlabel("cloud probability")
+        axs[0,j].set_yscale("log")
+        axs[0,j].set_xlim(0,100)
+        axs[0,j].set_ylim(top=1e7)
+        sns.histplot(x=cp_sliced, bins=15, binrange=(0,100), ax=axs[1,j])
+        axs[1,j].set_title(f"mean={np.nanmean(cp_sliced):.3f}")
+        if j==0: axs[1,j].set_ylabel("Sliced\ncount")
+        else: axs[1,j].set_ylabel("")
+        axs[1,j].set_xlabel("cloud probability")
+        axs[1,j].set_yscale("log")
+        axs[1,j].set_xlim(0,100)
+        axs[1,j].set_ylim(top=1e5)
+    plt.tight_layout()
+    if save_name is not None: savefigure(fig, save_name)
+    plt.show()
+
+def showRGBvaryingClipRange(d, s2repr_dirs, clipranges, islice=None, jslice=None, save_name=None):
+    img_path = getPaths(
+        d,
+        s2repr_dirs=s2repr_dirs,
+        returns=["img"]
+    )
+    fig, axs = plt.subplots(nrows=1, ncols=len(clipranges), figsize=(12,3))
+    rgb = loadRaster(img_path, bands=[4,3,2], islice=islice, jslice=jslice)
+    for i, cliprange in enumerate(clipranges):
+        x = clip(rgb, cliprange).transpose(1,2,0)
+        axs[i].imshow(x)
+        axs[i].set_title(f"clip range: {cliprange}")
+        axs[i].set_axis_off()
+    plt.tight_layout()
+    if save_name is not None: savefigure(fig, save_name)
+    plt.show()
+
+def showPairedBandsHistograms(d1, d2, s2repr_dirs, islice=None, jslice=None, save_name=None):
+    nc_path = getPaths(d1, s2repr_dirs=s2repr_dirs, returns=["img"])
+    vc_path = getPaths(d2, s2repr_dirs=s2repr_dirs, returns=["img"])
+    nc = loadRaster(nc_path, islice=islice, jslice=jslice, bands=None).reshape(12,-1)
+    vc = loadRaster(vc_path, islice=islice, jslice=jslice, bands=None).reshape(12,-1)
+    fig, axs = plt.subplots(ncols=3, nrows=4, figsize=(12,12))
+    axs = axs.flatten()
+    for i in range(12):
+        df = pd.DataFrame({
+            "values": nc[i].tolist()+vc[i].tolist(),
+            "conditions": ["no cloud" for _ in nc[i]]+["very cloudy" for _ in vc[i].tolist()],
+        })
+        sns.histplot(data=df, x="values", hue="conditions", ax=axs[i], binwidth=30)
+        axs[i].set_title(f"Band {i+1}")
+        axs[i].set_xlabel("")
+        axs[i].set_yscale("log")
+        if i<11: axs[i].legend([],[],frameon=False)
+    plt.tight_layout()
+    if save_name is not None: savefigure(fig, save_name)
+    plt.show()
+
 def showPairedMaps(matching_dirs, variable_index, variable_name, islice=None, jslice=None, 
                      normalize=False, save_name=None, figsize=(15,11)):
     fig, axs = plt.subplots(nrows=len(matching_dirs), ncols=6, figsize=figsize)
@@ -789,6 +860,10 @@ def showPredictionHistograms(dirs, titles, variable_index, variable_name,
                            trainset_means=None,
                            save_name=None, figsize=(10, 15)):
     fig, axs = plt.subplots(nrows=len(titles), ncols=2, figsize=figsize)
+    mxbounds = [np.inf, -np.inf]
+    mybound = -np.inf
+    uxbound = -np.inf
+    uybound = -np.inf
     for i, d in enumerate(dirs):
         dir_name = d.split("/")[-1]
         pid = dir_name.split("_")[0]
@@ -825,6 +900,22 @@ def showPredictionHistograms(dirs, titles, variable_index, variable_name,
         # axs[i,1].set_title(titles[i])
         axs[i,1].set_ylabel("")
         if log_uncertainty: axs[i,1].set_yscale("log")
+        # compute bounds
+        mxmin, mxmax = axs[i,0].get_xlim()
+        if mxmin < mxbounds[0]: mxbounds[0] = mxmin
+        if mxmax > mxbounds[1]: mxbounds[1] = mxmax
+        mymax = axs[i,0].get_ylim()[1]
+        if mymax > mybound: mybound = mymax
+        uxmax = axs[i,1].get_xlim()[1]
+        if uxmax > uxbound: uxbound = uxmax
+        uymax = axs[i,1].get_ylim()[1]
+        if uymax > uybound: uybound = uymax
+    for i, d, in enumerate(dirs):
+        axs[i,0].set_ylabel(f'{titles[i]}\nCount')
+        axs[i,0].set_xlim(*mxbounds)
+        axs[i,0].set_ylim(0, mybound)
+        axs[i,1].set_xlim(0, uxbound)
+        axs[i,1].set_ylim(0, uybound)
     for i, d, in enumerate(dirs):
         axs[i,0].set_ylabel(f'{titles[i]}\nCount')
     fig.suptitle(variable_name)
@@ -837,6 +928,10 @@ def showErrorHistograms(dirs, titles, variable_index, variable_name,
                            islice=None, jslice=None, normalize=False,
                            save_name=None, figsize=(10,15)):
     fig, axs = plt.subplots(nrows=len(titles), ncols=2, figsize=figsize)
+    cxbounds = [np.inf, -np.inf]
+    cybound = -np.inf
+    rxbounds = [np.inf, -np.inf]
+    rybound = -np.inf
     for i, d in enumerate(dirs):
         mean_path, variance_path, gt_path = getPaths(d, gt_dir=gt_dir, returns=["mean","variance","gt"])
         # load rasters
@@ -865,9 +960,67 @@ def showErrorHistograms(dirs, titles, variable_index, variable_name,
         # axs[i,1].set_title(titles[i])
         axs[i,1].set_ylabel("")
         if log_cerror: axs[i,1].set_xscale("log")
+        # compute bounds
+        rxmin, rxmax = axs[i,0].get_xlim()
+        if rxmin < rxbounds[0]: rxbounds[0] = rxmin
+        if rxmax > rxbounds[1]: rxbounds[1] = rxmax
+        rymax = axs[i,0].get_ylim()[1]
+        if rymax > rybound: rybound = rymax
+        cxmin, cxmax = axs[i,1].get_xlim()
+        if cxmin < cxbounds[0]: cxbounds[0] = cxmin
+        if cxmax > cxbounds[1]: cxbounds[1] = cxmax
+        cymax = axs[i,1].get_ylim()[1]
+        if cymax > cybound: cybound = cymax
     for i, d, in enumerate(dirs):
         axs[i,0].set_ylabel(f'{titles[i]}\nCount')
+        axs[i,0].set_xlim(*rxbounds)
+        axs[i,0].set_ylim(0, rybound)
+        axs[i,1].set_xlim(*cxbounds)
+        axs[i,1].set_ylim(0, cybound)
     fig.suptitle(variable_name)
+    plt.tight_layout()
+    if save_name is not None: savefigure(fig, save_name)
+    plt.show()
+
+def makeConditionUncertaintyTypePlot(dirs, titles, variable_names, islice=None, jslice=None, figsize=(12,15), save_name=None):
+    df = {"variable": [], "condition": [], "uncertainty": [], "type": []}
+    for j, d in enumerate(dirs):
+        aleatoric_path, epistemic_path = getPaths(d, returns=["aleatoric","epistemic"])
+        aleatoric = loadRaster(aleatoric_path, islice=islice, jslice=jslice, elementwise_fn=np.sqrt)
+        epistemic = loadRaster(epistemic_path, islice=islice, jslice=jslice, elementwise_fn=np.sqrt)
+        mean_aleatoric = np.nanmean(aleatoric, axis=(1,2))
+        mean_epistemic = np.nanmean(epistemic, axis=(1,2))
+        for i, variable_name in enumerate(variable_names):
+            for u, utype in zip([mean_aleatoric[i], mean_epistemic[i]], ["aleatoric", "epistemic"]):
+                df["variable"].append(variable_name)
+                df["condition"].append(titles[j])
+                df["uncertainty"].append(u)
+                df["type"].append(utype)
+    df = pd.DataFrame(df)
+    fig, axs = plt.subplots(nrows=len(variable_names), ncols=2, figsize=figsize)
+    for i, variable_name in enumerate(variable_names):
+        # average uncertainty plot
+        sub = df.query(f"variable == '{variable_name}'")
+        sns.lineplot(
+            data=sub,
+            x="condition",
+            y="uncertainty",
+            hue="type",
+            ax=axs[i,0]
+        )
+        axs[i,0].set_ylabel(f"{variable_name}")
+        axs[i,0].set_xlabel("")
+        if i==0: axs[i,0].set_title(f"average uncertainty")
+        if i==len(variable_names)-1: axs[i,0].legend().set_title("")
+        else: axs[i,0].legend([],[],frameon=False)
+        # average uncertainty increase plot
+        for utype in ["aleatoric", "epistemic"]:
+            sub = df.query(f"variable == '{variable_name}' & type == '{utype}'")
+            sub["uncertainty change"] = sub.uncertainty.values-sub.uncertainty.values[0]
+            c = "tab:orange" if utype=="epistemic" else "tab:blue"
+            axs[i,1].plot(sub.condition, sub["uncertainty change"], color=c, label=utype)
+        if i==len(variable_names)-1: axs[i,1].legend()
+        if i==0: axs[i,1].set_title(f"average uncertainty increase")
     plt.tight_layout()
     if save_name is not None: savefigure(fig, save_name)
     plt.show()
