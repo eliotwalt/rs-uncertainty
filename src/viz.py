@@ -532,6 +532,78 @@ def showPairedBandsHistograms(d1, d2, s2repr_dirs, islice=None, jslice=None, sav
     if save_name is not None: savefigure(fig, save_name)
     plt.show()
 
+def showDistanceToTrainsetExpectation(
+    dirs,
+    titles,
+    s2repr_dirs,
+    trainset_means,
+    variable_names,
+    islice=None,
+    jslice=None,
+    figsize=(12, 14),
+    save_name=None,
+):
+    fig, axs = plt.subplots(ncols=2, nrows=3, figsize=figsize)
+    axs = axs.flatten()
+    df = pd.DataFrame()
+    for d, c in zip(dirs, titles):
+        mean_path, img_path = getPaths(d, s2repr_dirs=s2repr_dirs, returns=["mean", "img"])
+        mean = loadRaster(mean_path, bands=None, islice=islice, jslice=jslice).reshape(5, -1)
+        cp = loadRaster(img_path, bands=-1, islice=islice, jslice=jslice).reshape(-1)
+        mask = ~np.isnan(mean).all(0)
+        mean, cp = mean[:,mask], cp[mask]
+        for i, variable_name in enumerate(variable_names):
+            dfc = pd.DataFrame({
+                "mean": mean[i]-trainset_means[i],
+                "condition": c,
+                "variable": variable_name
+            })
+            dfc = dfc.groupby(by=["condition", "variable"]).agg(
+                avg_mean=("mean", lambda x: np.nanmean(x)),
+                std_mean=("mean", lambda x: np.nanstd(x)),
+            )
+            df = pd.concat([df, dfc], axis=0)
+    for i, (ax, variable_name) in enumerate(zip(axs[:-1], variable_names)):
+        sub = df.query(f"variable == '{variable_name}'")
+        sns.lineplot(data=sub, x="condition", y="avg_mean", ax=ax)
+        color = ax.get_lines()[-1].get_c()
+        ax.fill_between(range(0,len(titles)), 
+                        sub.avg_mean+sub.std_mean, 
+                        sub.avg_mean-sub.std_mean,
+                        color=color, alpha=0.3)
+        ax.set_title(variable_name)
+        ylim = max(abs(l) for l in ax.get_ylim())
+        ax.set_ylim(-ylim, ylim)
+        ax.hlines(0, xmin=0, xmax=len(titles)-1, linestyle="dotted", color="black")
+        ax.set_xlabel("")
+        ax.set_ylabel("avg distance to train set expectation")
+    fig.delaxes(axs.flatten()[-1])
+    plt.tight_layout()
+    if save_name is not None: savefigure(fig, save_name)
+    plt.show()
+
+def showMeanDiffWithExpectation(
+    d,
+    trainset_means,
+    variable_names,
+    islice=None,
+    jslice=None,
+    figsize=(12,2),
+    save_name=None
+):
+    trainset_means = np.array(trainset_means).reshape(-1,1,1)
+    fig, axs = plt.subplots(ncols=len(variable_names), nrows=1, figsize=figsize)
+    mean_path = getPaths(d, returns=["mean"])
+    diffs = loadRaster(mean_path, bands=None, islice=islice, jslice=jslice)-trainset_means
+    for i, variable_name in enumerate(variable_names):
+        bound = np.nanmax(np.abs(diffs[i]))
+        sns.heatmap(diffs[i], cmap="bwr", vmin=-bound, vmax=bound, ax=axs[i])
+        axs[i].set_title(variable_name+f"\n(E[Y]={trainset_means[i,0,0]:.3f})")
+        axs[i].set_axis_off()
+    plt.tight_layout()
+    if  save_name is not None: savefigure(fig, save_name)
+    plt.show()
+
 def showPairedMaps(matching_dirs, variable_index, variable_name, islice=None, jslice=None, 
                      normalize=False, save_name=None, figsize=(15,11)):
     fig, axs = plt.subplots(nrows=len(matching_dirs), ncols=6, figsize=figsize)
