@@ -1418,6 +1418,79 @@ def showCloudVsUncertaintyType(
     if save_name is not None: savefigure(fig, save_name)
     plt.show()
 
+def showCloudVsMembersUncertainty(
+    dirs,
+    s2repr_dirs,
+    variable_names,
+    figsize=(12,18),
+    save_name=None
+):
+    nv = len(variable_names)
+    df = pd.DataFrame(
+        columns=["cp", "count", "average uncertainty", "uncertainty std", "model", "variable"])
+    # loop on directories
+    for i, d in enumerate(dirs):
+        # read data
+        variances_path, img_path = getPaths(
+            d, s2repr_dirs=s2repr_dirs, returns=["models_variance", "img"]
+        )
+        variances = loadRaster(variances_path, dtype="float64", elementwise_fn=np.sqrt).reshape(nv, 5, -1)
+        cp = loadRaster(img_path, bands=-1, dtype="float").reshape(-1)
+        mask = ~np.isnan(variances).all((0, 1))
+        variances, cp = variances[:,:,mask], cp[mask]
+        tmp = {
+            "cp": [],
+            "count": [],
+            "average uncertainty": [],
+            "uncertainty std": [],
+            "model": [],
+            "variable": [],
+        }
+        for i, variable_name in enumerate(variable_names):
+            for j, array in enumerate(variances[i]):
+                tmp["cp"].extend(cp.tolist())
+                tmp["count"].extend(np.ones_like(cp).tolist())
+                tmp[f"average uncertainty"].extend(array.tolist())
+                tmp[f"uncertainty std"].extend((array**2).tolist())
+                tmp[f"model"].extend([str(j+1) for _ in array])
+                tmp[f"variable"].extend([variable_name for _ in array])
+        tmp = pd.DataFrame(tmp)
+        tmp = tmp.groupby(["cp", "model", "variable"]).sum().reset_index()
+        df = pd.concat([df, tmp], axis=0)
+    df = df.groupby(["cp", "variable", "model"]).sum().reset_index()
+    df["average uncertainty"] /= df["count"]
+    df["uncertainty std"] /= df["count"]
+    df["uncertainty std"] = np.sqrt(df["uncertainty std"]-df["average uncertainty"]**2)
+    fig, axs = plt.subplots(ncols=2, nrows=nv, figsize=figsize)
+    colors = sns.color_palette()
+    for i, variable_name in enumerate(variable_names):
+        sub = df.query(f"variable == '{variable_name}'")
+        sns.lineplot(data=sub, x="cp", y="average uncertainty", hue="model", hue_order=[str(j) for j in range(1,6)], ax=axs[i,0])
+        for j in range(1,6):
+            subsub = sub.query(f"model == '{j}'")
+            axs[i,0].fill_between(subsub.cp, 
+                                  subsub["average uncertainty"]-subsub["uncertainty std"], 
+                                  subsub["average uncertainty"]+subsub["uncertainty std"], 
+                                  color=colors[j-1],
+                                  alpha=0.1)
+        axs[i,0].set_ylabel(f"{variable_name}")
+        axs[i,0].set_xlabel(f"cloud probability")
+        if i==0: axs[i,0].set_title(f"average uncertainty")
+        if i==nv-1: axs[i,0].legend()
+    for i, variable_name in enumerate(variable_names):
+        for j in range(1,6):
+            sub = df.query(f"variable == '{variable_name}' & model == '{j}'")
+            sub["uncertainty change"] = sub["average uncertainty"].values-sub["average uncertainty"].values[0]
+            axs[i,1].plot(sub.cp, sub["uncertainty change"], color=colors[j-1], label=str(j))
+        # sns.lineplot(data=sub, x="cp", y="average uncertainty", hue="model", hue_order=[str(j) for j in range(1,6)], ax=axs[i,1])
+        axs[i,1].set_xlabel(f"cloud probability")
+        if i==nv-1: axs[i,1].legend()
+        if i==0: axs[i,1].set_title(f"average uncertainty increase")
+    fig.delaxes(axs.flatten()[-1])
+    plt.tight_layout()
+    if save_name is not None: savefigure(fig, save_name)
+    plt.show()
+
 def showCloudVsPrediction(
     dirs,
     s2repr_dirs,
