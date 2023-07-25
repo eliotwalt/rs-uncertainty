@@ -21,6 +21,7 @@ token.json
 gee_data*/
 results_copy
 images/
+computed_resources/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

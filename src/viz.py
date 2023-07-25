@@ -7,6 +7,7 @@ from matplotlib.colors import LogNorm
 import tempfile
 import math
 import json
+from scipy.signal import decimate
 from tqdm import tqdm
 import os
 import seaborn as sns
@@ -88,6 +89,18 @@ class ExperimentVisualizer():
             ax.set_xlabel("log variance")
         if not show_legend:
             ax.get_legend().remove()
+            cmap = sns.color_palette("bwr")
+            b, r = cmap[0], cmap[-1]
+            cols = ["variance", "probability", self.exp_var_name]
+            hhdf[cols[-1]] = hhdf[cols[-1]].astype("float")
+            max_expvar_data = hhdf[hhdf[cols[-1]]==hhdf[cols[-1]].max()].sort_values(by=cols[0])
+            ax.plot(max_expvar_data[cols[0]],max_expvar_data[cols[1]],color=r,label=f"maximum {self.exp_var_name}: {max_expvar_data[cols[-1]].values[0]:.2f}%", alpha=0.75)
+            min_expvar_data = hhdf[hhdf[cols[-1]]==hhdf[cols[-1]].min()].sort_values(by=cols[0])
+            ax.plot(min_expvar_data[cols[0]],min_expvar_data[cols[1]],color=b,label=f"minimum {self.exp_var_name}: {min_expvar_data[cols[-1]].values[0]:.2f}%", alpha=0.75)
+            handles, labels = ax.get_legend_handles_labels()
+            ax.legend([handle for i,handle in enumerate(handles[-2:])],
+                    [label for i,label in enumerate(labels[-2:])],
+                    loc= 'best')
         else:
             ax.legend(loc="upper right")
         return ax
@@ -209,7 +222,18 @@ class ExperimentVisualizer():
         else: kwargs = {}
         sns.lineplot(data=ccdf, x=cols[0], y=cols[1], hue=self.exp_var_name, ax=ax, alpha=0.5, **kwargs)
         if not show_legend:
+            cmap = sns.color_palette("bwr")
+            r, b = cmap[0],cmap[-1]
             ax.get_legend().remove()
+            ccdf[cols[-1]] = ccdf[cols[-1]].astype("float")
+            max_expvar_data = ccdf[ccdf[cols[-1]]==ccdf[cols[-1]].max()].sort_values(by=cols[0])
+            ax.plot(max_expvar_data[cols[0]],max_expvar_data[cols[1]],color=b,label=f"maximum {self.exp_var_name}: {max_expvar_data[cols[-1]].values[0]:.2f}%", alpha=0.75)
+            min_expvar_data = ccdf[ccdf[cols[-1]]==ccdf[cols[-1]].min()].sort_values(by=cols[0])
+            ax.plot(min_expvar_data[cols[0]],min_expvar_data[cols[1]],color=r,label=f"minimum {self.exp_var_name}: {min_expvar_data[cols[-1]].values[0]:.2f}%", alpha=0.75)
+            handles, labels = ax.get_legend_handles_labels()
+            ax.legend([handle for i,handle in enumerate(handles[-2:])],
+                    [label for i,label in enumerate(labels[-2:])],
+                    loc= 'best')
         else:
             ax.legend(loc="upper right")
         # ax.vlines(x=xc, ymin=lo, ymax=hi/5, color="black", ls="dashed")
@@ -314,6 +338,13 @@ def norm2d(x, mn=None, mx=None, a=0, b=1):
     if mn is None: mn = np.nanmin(x)
     if mx is None: mx = np.nanmax(x)
     return (b-a)*(x-mn)/(mx-mn)+a
+
+def decimateNd(x, q, axis):
+    assert isinstance(axis, int) or isinstance(axis, list) or isinstance(axis, tuple)
+    if isinstance(axis, int): axis = [axis] 
+    for ax in axis:
+        x = decimate(x, q, axis=ax)
+    return x
 
 def multiNorm2d(*sources, a=0, b=1, axis=None, return_bounds=False):
     mn, mx = multiMinMax(*sources, axis)
@@ -493,6 +524,61 @@ def showConditionCloudDistribution(
     plt.tight_layout()
     if save_name is not None: savefigure(fig, save_name)
     plt.show()
+
+def showEmpiricalSelectionRejectionProbs(
+    cp_df,
+    empirical_cp_threshold,
+    interpolate=True,
+    figsize=(12,8),
+    save_name=None
+):
+    if interpolate:
+        cp_df = cp_df.interpolate(limit_direction="both")
+    fig = plt.figure(figsize=figsize)
+    ax = plt.gca()
+    sns.lineplot(data=cp_df, x="cp", y="selection_probability", color="tab:blue", label="selection", ax=ax)
+    sns.lineplot(data=cp_df, x="cp", y="rejection_probability", color="tab:orange", label="rejection", ax=ax)
+    ax.vlines(empirical_cp_threshold, 0, 1, linestyle="dashed", color="black", 
+            label=f"empirical threshold (cp={empirical_cp_threshold}%)")
+    ax.set_ylabel("empirical probability")
+    ax.set_xlabel("cloud probability")
+    ax.legend()
+    plt.tight_layout()
+    if save_name is not None: savefigure(fig, save_name)
+    plt.show()
+
+def computeValidCenterFraction(
+    dirs, 
+    titles, 
+    s2repr_dirs, 
+    empirical_cp_threshold,
+    islice=None, 
+    jslice=None,
+    figsize=(10, 4),
+    save_name=None,
+):
+    fig, axs = plt.subplots(ncols=len(dirs), nrows=1, figsize=figsize)
+    data = {"condition": [], "sliced selected fraction (%)": [], "complete selected fraction (%)": []}
+    for i, (d, t) in enumerate(zip(dirs, titles)):
+        img_path  = getPaths(d, s2repr_dirs=s2repr_dirs, returns=["img"])
+        cp = loadRaster(img_path, bands=-1, islice=None, jslice=None, dtype="float").reshape(-1)
+        slice_cp = loadRaster(img_path, bands=-1, islice=islice, jslice=jslice, dtype="float")
+        slice_cp_flat = slice_cp.reshape(-1)
+        data["condition"].append(t)
+        for vals, col in zip([cp, slice_cp_flat], ["sliced selected fraction (%)", "complete selected fraction (%)"]):
+            data[col].append((vals<=empirical_cp_threshold).astype("int").sum()/vals.shape[0]*100)
+        rgb = loadRaster(img_path, bands=[4,3,2], islice=islice, jslice=jslice, transpose_order=(1,2,0), clip_range=(100, 2000))
+        axs[i].imshow(rgb)
+        cp_mask = (slice_cp<=empirical_cp_threshold).astype("float")
+        cp_mask[cp_mask==0] = -1
+        sns.heatmap(cp_mask, cmap="bwr_r", alpha=0.65, cbar=False, ax=axs[i])
+        frac = float(pd.DataFrame(data).query(f"condition == '{t}'")["sliced selected fraction (%)"])
+        axs[i].set_title(f"{t}\n({frac:.2f}% selected)")
+        axs[i].set_axis_off()
+    plt.tight_layout()
+    if save_name is not None: savefigure(fig, save_name)
+    plt.show()
+    return pd.DataFrame(data)
 
 def showRGBvaryingClipRange(d, s2repr_dirs, clipranges, islice=None, jslice=None, save_name=None):
     img_path = getPaths(
@@ -1071,7 +1157,7 @@ def makeConditionUncertaintyTypePlot(dirs, titles, variable_names, islice=None, 
     df = pd.DataFrame(df)
     fig, axs = plt.subplots(nrows=len(variable_names), ncols=2, figsize=figsize)
     for i, variable_name in enumerate(variable_names):
-        # average uncertainty plot
+        # average distance to ensemble mean plot
         sub = df.query(f"variable == '{variable_name}'")
         sns.lineplot(
             data=sub,
@@ -1082,41 +1168,38 @@ def makeConditionUncertaintyTypePlot(dirs, titles, variable_names, islice=None, 
         )
         axs[i,0].set_ylabel(f"{variable_name}")
         axs[i,0].set_xlabel("")
-        if i==0: axs[i,0].set_title(f"average uncertainty")
+        if i==0: axs[i,0].set_title(f"average distance to ensemble mean")
         if i==len(variable_names)-1: axs[i,0].legend().set_title("")
         else: axs[i,0].legend([],[],frameon=False)
-        # average uncertainty increase plot
+        # average distance to ensemble mean increase plot
         for utype in ["aleatoric", "epistemic"]:
             sub = df.query(f"variable == '{variable_name}' & type == '{utype}'")
             sub["uncertainty change"] = sub.uncertainty.values-sub.uncertainty.values[0]
             c = "tab:orange" if utype=="epistemic" else "tab:blue"
             axs[i,1].plot(sub.condition, sub["uncertainty change"], color=c, label=utype)
         if i==len(variable_names)-1: axs[i,1].legend()
-        if i==0: axs[i,1].set_title(f"average uncertainty increase")
+        if i==0: axs[i,1].set_title(f"average distance to ensemble mean increase")
     plt.tight_layout()
     if save_name is not None: savefigure(fig, save_name)
     plt.show()
 
-def makeConditionUncertaintyCoveragePlot(dirs, titles, variable_names, islice=None, jslice=None, figsize=(12,8), save_name=None):
-    df = {"variable": [], "condition": [], "prediction standard deviation": [], "mean predictive uncertainty": [], "mean standard deviation coverage (%)": []}
+def makeConditionUncertaintyCoveragePlot(dirs, titles, variable_names, trainset_means, islice=None, jslice=None, figsize=(12,8), save_name=None):
+    df = {"variable": [], "condition": [], "mean predictive uncertainty": [], "mean relative predictive uncertainty (%)": []}
     for j, d in enumerate(dirs):
-        mean_path, variance_path = getPaths(d, returns=["mean","variance"])
-        mean = loadRaster(mean_path, islice=islice, jslice=jslice)
+        variance_path = getPaths(d, returns=["variance"])
         pu = loadRaster(variance_path, islice=islice, jslice=jslice, elementwise_fn=np.sqrt)
-        pred_std = np.nanstd(mean, axis=(1,2))
         mean_pu = np.nanmean(pu, axis=(1,2))
         for i, variable_name in enumerate(variable_names):
             df["variable"].append(variable_name)
             df["condition"].append(titles[j])
-            df["prediction standard deviation"].append(pred_std[i])
             df["mean predictive uncertainty"].append(mean_pu[i])
-            df["mean standard deviation coverage (%)"].append(mean_pu[i]/pred_std[i]*100)
+            df["mean relative predictive uncertainty (%)"].append(mean_pu[i]/trainset_means[i]*100)
     df = pd.DataFrame(df)
     fig = plt.figure(figsize=figsize)
     sns.lineplot(
         data=df,
         x="condition",
-        y="mean standard deviation coverage (%)",
+        y="mean relative predictive uncertainty (%)",
         hue="variable"
     )
     plt.tight_layout()
@@ -1434,7 +1517,7 @@ def showCloudVsMembersUncertainty(
         variances_path, img_path = getPaths(
             d, s2repr_dirs=s2repr_dirs, returns=["models_variance", "img"]
         )
-        variances = loadRaster(variances_path, dtype="float64", elementwise_fn=np.sqrt).reshape(nv, 5, -1)
+        variances = loadRaster(variances_path, dtype="float64", elementwise_fn=np.sqrt).reshape(5, nv, -1).transpose(1,0,2)
         cp = loadRaster(img_path, bands=-1, dtype="float").reshape(-1)
         mask = ~np.isnan(variances).all((0, 1))
         variances, cp = variances[:,:,mask], cp[mask]
@@ -1477,6 +1560,7 @@ def showCloudVsMembersUncertainty(
         axs[i,0].set_xlabel(f"cloud probability")
         if i==0: axs[i,0].set_title(f"average uncertainty")
         if i==nv-1: axs[i,0].legend()
+        else: axs[i,0].legend([],[],frameon=False)
     for i, variable_name in enumerate(variable_names):
         for j in range(1,6):
             sub = df.query(f"variable == '{variable_name}' & model == '{j}'")
@@ -1486,7 +1570,81 @@ def showCloudVsMembersUncertainty(
         axs[i,1].set_xlabel(f"cloud probability")
         if i==nv-1: axs[i,1].legend()
         if i==0: axs[i,1].set_title(f"average uncertainty increase")
-    fig.delaxes(axs.flatten()[-1])
+    plt.tight_layout()
+    if save_name is not None: savefigure(fig, save_name)
+    plt.show()
+
+def showCloudVsMembersEpistemic(
+    dirs,
+    s2repr_dirs,
+    variable_names,
+    figsize=(12,18),
+    save_name=None
+):
+    nv = len(variable_names)
+    df = pd.DataFrame(
+        columns=["cp", "count", "average distance to ensemble mean", "uncertainty std", "model", "variable"])
+    # loop on directories
+    for i, d in enumerate(dirs):
+        # read data
+        mean_path, img_path = getPaths(
+            d, s2repr_dirs=s2repr_dirs, returns=["models_mean", "img"]
+        )
+        means = loadRaster(mean_path, dtype="float64").reshape(5, nv, -1).transpose(1,0,2)
+        cp = loadRaster(img_path, bands=-1, dtype="float").reshape(-1)
+        mask = ~np.isnan(means).all((0, 1))
+        means, cp = means[:,:,mask], cp[mask]
+        tmp = {
+            "cp": [],
+            "count": [],
+            "average distance to ensemble mean": [],
+            "uncertainty std": [],
+            "model": [],
+            "variable": [],
+        }
+        mean_means = np.nanmean(means, axis=1)
+        for i, variable_name in enumerate(variable_names):
+            for j, array in enumerate(means[i]):
+                array = np.abs(means[i,j]-mean_means[i])
+                tmp["cp"].extend(cp.tolist())
+                tmp["count"].extend(np.ones_like(cp).tolist())
+                tmp[f"average distance to ensemble mean"].extend(array.tolist())
+                tmp[f"uncertainty std"].extend((array**2).tolist())
+                tmp[f"model"].extend([str(j+1) for _ in array])
+                tmp[f"variable"].extend([variable_name for _ in array])
+        tmp = pd.DataFrame(tmp)
+        tmp = tmp.groupby(["cp", "model", "variable"]).sum().reset_index()
+        df = pd.concat([df, tmp], axis=0)
+    df = df.groupby(["cp", "variable", "model"]).sum().reset_index()
+    df["average distance to ensemble mean"] /= df["count"]
+    df["uncertainty std"] /= df["count"]
+    df["uncertainty std"] = np.sqrt(df["uncertainty std"]-df["average distance to ensemble mean"]**2)
+    fig, axs = plt.subplots(ncols=2, nrows=nv, figsize=figsize)
+    colors = sns.color_palette()
+    for i, variable_name in enumerate(variable_names):
+        sub = df.query(f"variable == '{variable_name}'")
+        sns.lineplot(data=sub, x="cp", y="average distance to ensemble mean", hue="model", hue_order=[str(j) for j in range(1,6)], ax=axs[i,0])
+        for j in range(1,6):
+            subsub = sub.query(f"model == '{j}'")
+            axs[i,0].fill_between(subsub.cp, 
+                                  subsub["average distance to ensemble mean"]-subsub["uncertainty std"], 
+                                  subsub["average distance to ensemble mean"]+subsub["uncertainty std"], 
+                                  color=colors[j-1],
+                                  alpha=0.1)
+        axs[i,0].set_ylabel(f"{variable_name}")
+        axs[i,0].set_xlabel(f"cloud probability")
+        if i==0: axs[i,0].set_title(f"average distance to ensemble mean")
+        if i==nv-1: axs[i,0].legend()
+        else: axs[i,0].legend([],[],frameon=False)
+    for i, variable_name in enumerate(variable_names):
+        for j in range(1,6):
+            sub = df.query(f"variable == '{variable_name}' & model == '{j}'")
+            sub["uncertainty change"] = sub["average distance to ensemble mean"].values-sub["average distance to ensemble mean"].values[0]
+            axs[i,1].plot(sub.cp, sub["uncertainty change"], color=colors[j-1], label=str(j))
+        # sns.lineplot(data=sub, x="cp", y="average distance to ensemble mean", hue="model", hue_order=[str(j) for j in range(1,6)], ax=axs[i,1])
+        axs[i,1].set_xlabel(f"cloud probability")
+        if i==nv-1: axs[i,1].legend()
+        if i==0: axs[i,1].set_title(f"average distance to ensemble mean increase")
     plt.tight_layout()
     if save_name is not None: savefigure(fig, save_name)
     plt.show()
@@ -1554,7 +1712,7 @@ def showCloudVsUncertaintyCoverage(
     dirs,
     s2repr_dirs,
     variable_names,
-    trainset_stds,
+    trainset_means,
     islice=None,
     jslice=None,
     figsize=(12,8),
@@ -1598,15 +1756,16 @@ def showCloudVsUncertaintyCoverage(
     colors = sns.color_palette()
     for i, variable_name in enumerate(variable_names):
         sub = df.query(f"variable == '{variable_name}'")
-        sub.loc[:,"average"] /= trainset_stds[i]
-        sub.loc[:,"stddev"] /= trainset_stds[i]
+        sub.loc[:,"average"] /= trainset_means[i]
+        sub.loc[:,"stddev"] /= trainset_means[i]
         sub.loc[:,"average"] *= 100
         sub.loc[:,"stddev"] *= 100
-        sns.lineplot(data=sub, x="cp", y="average", ax=ax, color=colors[i])
+        sns.lineplot(data=sub, x="cp", y="average", ax=ax, color=colors[i], label=variable_name)
         ax.fill_between(sub.cp, sub.average-sub.stddev, sub.average+sub.stddev, alpha=0.1, color=colors[i])
-        ax.set_ylabel("mean standard deviation coverage (%)")
+        ax.set_ylabel("mean relative predictive uncertainty (%)")
         ax.set_xlabel(f"cloud probability")
         ax.set_title(variable_name)
+    ax.legend()
     plt.tight_layout()
     if save_name is not None: savefigure(fig, save_name)
     plt.show()

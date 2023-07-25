@@ -261,7 +261,7 @@ class ProjectsPreprocessor:
             except IndexError: pass 
         if polygon is None: print("No polygon found")
         polygon = rasterio.warp.transform_geom(src_crs=crs, dst_crs=gt_file.crs, geom=polygon)
-        rasterized_polygon = rasterized_polygon = rasterio.features.rasterize(
+        rasterized_polygon = rasterio.features.rasterize(
             [(polygon, 1)],
             out_shape=gt_file.shape,
             transform=gt_file.transform,
@@ -348,7 +348,7 @@ class ProjectsPreprocessor:
                 j_slice = slice(j - patch_half, j + patch_half + 1)
                 is_same_split = (split_mask[i_slice, j_slice] == split_mask[i_slice, j_slice][0, 0]).all()
                 is_in_polygon = (rasterized_polygon[i_slice, j_slice] == 1).all()
-                # Ignore pixels that span over multiple splits and lie completly in their polygon
+                # Ignore pixels that span over multiple splits and don't lie completly in their polygon
                 if is_same_split and is_in_polygon and valid_mask[i,j]:
                     dataset = self.split_map[int(split_mask[i,j])]
                     images_for_pixel: List[Tuple[np.ndarray, List[np.ndarray], List[np.ndarray]]] = []
