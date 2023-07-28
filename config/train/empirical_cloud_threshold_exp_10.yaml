@@ -1,0 +1,35 @@
+data:
+  pkl_dir: 'data/cp_retraining/2023-07-28_15-54-22_empirical_cloud_threshold_exp_10'
+  projects: ['1023', '825', '764']
+  s1_image_bands: [1, 2]
+  s2_image_bands: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  labels_bands: [1, 2, 3, 4, 5]
+  normalize_labels: false
+  both_orbit_directions: true
+  subsample: 0.05
+  loader_args:
+    pin_memory: true
+
+model:
+  type: resnext
+  layers: [2,3,5,3]
+  groups: 32
+  width_per_group: 4
+  use_pixel_shortcut: true
+  use_s1_block: true
+
+training:
+  random_seed: 12345
+  deterministic: true
+  resume_checkpoint: null
+  epochs: 400
+  lr: 0.0001
+  weight_decay: 0.001
+  use_wandb_logger: true
+  # use_wandb_logger: false
+  activate_mean: true
+  scheduler:
+    milestones: [50, 75]
+
+logging:
+    labels_names: ['p95', 'mean_height', 'density', 'gini', 'cover']

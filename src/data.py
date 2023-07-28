@@ -100,13 +100,13 @@ class ForestData:
             stats = yaml.safe_load(fh)
 
         # construct standardization vectors
-        self.s2_mean = np.array(stats['s2_stats']['_mean'])[s2_channels].tolist()
-        self.s2_std = np.array(stats['s2_stats']['_std'])[s2_channels].tolist()
-        self.s1_mean = np.array(stats['s1_stats']['_mean'])[s1_channels].tolist()
-        self.s1_std = np.array(stats['s1_stats']['_std'])[s1_channels].tolist()
+        self.s2_mean = np.array(stats['s2_stats']['mean'])[s2_channels].tolist()
+        self.s2_std = np.array(stats['s2_stats']['std'])[s2_channels].tolist()
+        self.s1_mean = np.array(stats['s1_stats']['mean'])[s1_channels].tolist()
+        self.s1_std = np.array(stats['s1_stats']['std'])[s1_channels].tolist()
         if normalize_labels:
-            self.labels_mean = np.array(stats['labels_stats']['_mean'])[labels_channels].tolist()
-            self.labels_std = np.array(stats['labels_stats']['_std'])[labels_channels].tolist()
+            self.labels_mean = np.array(stats['labels_stats']['mean'])[labels_channels].tolist()
+            self.labels_std = np.array(stats['labels_stats']['std'])[labels_channels].tolist()
         else:
             self.labels_mean, self.labels_std = [0.] * len(labels_channels), [1.] * len(labels_channels)
 
