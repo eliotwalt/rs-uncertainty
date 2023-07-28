@@ -600,20 +600,20 @@ def showRGBvaryingClipRange(d, s2repr_dirs, clipranges, islice=None, jslice=None
 def showPairedBandsHistograms(d1, d2, s2repr_dirs, islice=None, jslice=None, save_name=None):
     nc_path = getPaths(d1, s2repr_dirs=s2repr_dirs, returns=["img"])
     vc_path = getPaths(d2, s2repr_dirs=s2repr_dirs, returns=["img"])
-    nc = loadRaster(nc_path, islice=islice, jslice=jslice, bands=None).reshape(12,-1)
-    vc = loadRaster(vc_path, islice=islice, jslice=jslice, bands=None).reshape(12,-1)
+    nc = loadRaster(nc_path, islice=islice, jslice=jslice, bands=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]).reshape(12,-1)
+    vc = loadRaster(vc_path, islice=islice, jslice=jslice, bands=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]).reshape(12,-1)
     fig, axs = plt.subplots(ncols=3, nrows=4, figsize=(12,12))
     axs = axs.flatten()
-    for i in range(12):
+    for i, ax in enumerate(axs):
         df = pd.DataFrame({
             "values": nc[i].tolist()+vc[i].tolist(),
             "conditions": ["no cloud" for _ in nc[i]]+["very cloudy" for _ in vc[i].tolist()],
         })
-        sns.histplot(data=df, x="values", hue="conditions", ax=axs[i], binwidth=30)
-        axs[i].set_title(f"Band {i+1}")
-        axs[i].set_xlabel("")
-        axs[i].set_yscale("log")
-        if i<11: axs[i].legend([],[],frameon=False)
+        sns.histplot(data=df, x="values", hue="conditions", ax=ax, binwidth=30)
+        ax.set_title(f"Band {i+1}")
+        ax.set_xlabel("")
+        ax.set_yscale("log")
+        if i<11: ax.legend([],[],frameon=False)
     plt.tight_layout()
     if save_name is not None: savefigure(fig, save_name)
     plt.show()
