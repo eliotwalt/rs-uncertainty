@@ -571,7 +571,8 @@ def computeValidCenterFraction(
         axs[i].imshow(rgb)
         cp_mask = (slice_cp<=empirical_cp_threshold).astype("float")
         cp_mask[cp_mask==0] = -1
-        sns.heatmap(cp_mask, cmap="bwr_r", alpha=0.65, cbar=False, ax=axs[i])
+        cp_mask[cp_mask==1] = 1
+        sns.heatmap(cp_mask, cmap="bwr_r", alpha=0.65, cbar=False, ax=axs[i], vmin=-1, vmax=1)
         frac = float(pd.DataFrame(data).query(f"condition == '{t}'")["sliced selected fraction (%)"])
         axs[i].set_title(f"{t}\n({frac:.2f}% selected)")
         axs[i].set_axis_off()

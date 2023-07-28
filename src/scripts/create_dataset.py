@@ -75,6 +75,8 @@ class ProjectsPreprocessor:
         self.run.seed_all(self.seed)
         # save directory
         self.save_dir = self.run["save_dir"]
+        if self.run["add_date_to_save_dir"]:
+            save_dir = pjoin(cfg["save_dir"], datetime.now().strftime('%Y-%m-%d_%H-%M-%S'))
         Path(self.save_dir).mkdir(parents=True, exist_ok=True)
         # create dataset
         self.prange = trange
@@ -703,11 +705,7 @@ def configure(cfg_f, num_projects_per_job):
         if len(sub_projects)==0: break
         cfg["projects"] = sub_projects
         # define subdirectory
-        sub_save_dir = pjoin(save_dir, "-".join(sub_projects))
-        sub_save_dir.mkdir(parents=False)
-        cfg["save_dir"] = str(sub_save_dir)
-        # write config
-        sub_cfg_path = pjoin(sub_save_dir, cfg_f.name)
+        sub_save_dir = pjoin(save_dir, "-".join(sub_projects))save_dir = pjoin(cfg["save_dir"], datetime.now().strftime('%Y-%m-%d_%H-%M-%S'))
         with sub_cfg_path.open("w", encoding="utf-8") as f:
             yaml.dump(cfg, f, sort_keys=False)
         sub_cfg_paths.append(sub_cfg_path)
