@@ -2,13 +2,20 @@ s1_reprojected_dir: 'assets/data/sentinel_data/s1_reprojected'
 s2_reprojected_dir: 'assets/data/sentinel_data/s2_reprojected'
 gt_dir: 'assets/data/preprocessed'
 split_mask_dir: 'assets/data/split_masks'
-save_dir: 'data/cp_retraining'
-name: 'empirical_cloud_threshold_exp_70'
 project_shapefiles: ['assets/data/NHM_projectDekning_AOI_edit2015_V2.shp', 'assets/data/ALS_projects_Dz_all_norway.shp']
 data_bands: [1, 2, 3, 4, 5] # p95, mean height, density, gini, cover
 projects: ['1023', '825', '764']
 sampling_strategy: 'valid_center'
 patch_size: 15
-testset_max_days_delta: 365 # restrict testset to "cleanest" version, i.e. with diff between images and gt of max x days
+margin: 3  # should be less than 7 to not overlap with train/val stripes
 cloud_prob_threshold: 70
 cloudy_pixels_threshold: 0.01
+pkl_dir: 'data/cp_retraining/2023-07-28_15-54-42_empirical_cloud_threshold_exp_70'
+save_dir: 'results'
+name: 'empirical_cloud_threshold_exp_70'
+checkpoint_dirs:
+  - 'train_logs/23-07-28_17-04-41_yellow-hornet-12'
+  - 'train_logs/23-07-28_17-04-40_jolly-cuttlefish-11'
+  - 'train_logs/23-07-28_17-04-37_vigorous-oxpecker-8'
+  - 'train_logs/23-07-28_17-04-38_smooth-snail-9'
+  - 'train_logs/23-07-28_16-47-23_qualified-hound-2'
