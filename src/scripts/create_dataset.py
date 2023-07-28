@@ -705,7 +705,7 @@ def configure(cfg_f, num_projects_per_job):
         if len(sub_projects)==0: break
         cfg["projects"] = sub_projects
         # define subdirectory
-        sub_save_dir = pjoin(save_dir, "-".join(sub_projects))save_dir = pjoin(cfg["save_dir"], datetime.now().strftime('%Y-%m-%d_%H-%M-%S'))
+        sub_save_dir = pjoin(save_dir, "-".join(sub_projects))
         with sub_cfg_path.open("w", encoding="utf-8") as f:
             yaml.dump(cfg, f, sort_keys=False)
         sub_cfg_paths.append(sub_cfg_path)
