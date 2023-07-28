@@ -111,7 +111,7 @@ class ProjectsPreprocessor:
         # save stats and config
         start = time()
         if self.verbose: print("Writing stats")
-        if self.run["stats_path"] is not None:
+        if "stats_path" in self.run.get_raw_config() and self.run["stats_path"] is not None:
             self._copy_global_stats(self.projects_stats, self.run["stats_path"])
         with pjoin(self.save_dir, "stats.yaml").open("w") as fh:
             yaml.dump(self.projects_stats, fh)
