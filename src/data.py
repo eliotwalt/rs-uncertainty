@@ -131,6 +131,7 @@ class ForestData:
             np.concatenate(offsets[split]),
             **data_args
         ) for split in ('train', 'val'))
+        print(f"[data:134] train set size: {len(train_set)}, subsample: {subsample}, num_samples: {int(subsample * len(train_set))}")
 
         if subsample and subsample < 1.0:
             train_sampler = RandomSampler(train_set, num_samples=int(subsample * len(train_set)))
