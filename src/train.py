@@ -32,7 +32,6 @@ labels_names = [run['logging.labels_names'][i - 1] for i in run['data.labels_ban
 @run.validate_step
 def step(batch, model):
     x, y = batch
-    print(f"[train:35] train/val step: x: {x.shape}, y: {y.shape}")
     mu, log_var = model(x)
     log_var = limit(log_var)
 
