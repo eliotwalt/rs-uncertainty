@@ -37,8 +37,10 @@ if [[ $MACHINE == "--euler" ]]; then
     do
         read -a configTriplet <<< "${configTriplets[$i]}"
         echo "Submitting pipeline job for: ${configTriplet[@]}"
+        # get log files
+        log_suffix=`python -c "print('_'.join('${configTriplet[0]}'.split('/')[-2].split('_')[1:]))"`
         # create
-        log_f=/cluster/work/igp_psr/elwalt/logs/pipeline/${experiment_name}.log
+        log_f=/cluster/work/igp_psr/elwalt/logs/pipeline/${experiment_name}_${log_suffix}.log
         mkdir -p $(dirname $log_f)
         touch $log_f
         echo "log file is: ${log_f}"
