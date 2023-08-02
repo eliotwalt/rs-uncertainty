@@ -21,7 +21,7 @@ def check_integrity(create_config, predict_config, eval_config):
     assert predict_config["save_dir"]==eval_config["prediction_dir"]
     assert predict_config["closest_s1"]==True
     assert predict_config["add_date_to_save_dir"]==False
-    if "stats_path" in create_config or if "stats_path" in predict_config: 
+    if "stats_path" in create_config or "stats_path" in predict_config: 
         assert create_config["stats_path"] == predict_config["stats_path"]
 
 def check_tokens(*configs):
