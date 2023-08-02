@@ -29,6 +29,7 @@ if [[ $MACHINE == "--euler" ]]; then
 else 
     mapfile -t configTriplets < <(python ${root}/src/scripts/configure_one_image_dataset_experiment.py --create ${createConfig} --predict ${predictConfig} --eval ${evalConfig})
 fi
+experiment_name=`python -c "from pathlib import Path; print(Path('${createConfig}').stem)"`
 
 # submit pipeline job
 if [[ $MACHINE == "--euler" ]]; then 
@@ -36,12 +37,10 @@ if [[ $MACHINE == "--euler" ]]; then
     do
         read -a configTriplet <<< "${configTriplets[$i]}"
         echo "Submitting pipeline job for: ${configTriplet[@]}"
-        # get log files
-        log_name=$(echo $(basename ${configTriplet[0]}) | cut -d "." -f 1)
         # create
-        log_f=/cluster/work/igp_psr/elwalt/logs/pipeline/$log_name.log
+        log_f=/cluster/work/igp_psr/elwalt/logs/pipeline/${experiment_name}.log
         mkdir -p $(dirname $log_f)
-        touch log_f
+        touch $log_f
         echo "log file is: ${log_f}"
         # make options
         pipelineOptions="${options} --output=${log_f} --error=${log_f}"
