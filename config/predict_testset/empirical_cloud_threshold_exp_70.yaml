@@ -11,11 +11,11 @@ margin: 3  # should be less than 7 to not overlap with train/val stripes
 cloud_prob_threshold: 70
 cloudy_pixels_threshold: 0.01
 pkl_dir: 'data/cp_retraining/2023-07-28_15-54-42_empirical_cloud_threshold_exp_70'
-save_dir: 'results'
+save_dir: 'results/empirical_cloud_threshold_exp/'
 name: 'empirical_cloud_threshold_exp_70'
 checkpoint_dirs:
-  - 'train_logs/23-07-28_17-04-41_yellow-hornet-12'
-  - 'train_logs/23-07-28_17-04-40_jolly-cuttlefish-11'
-  - 'train_logs/23-07-28_17-04-37_vigorous-oxpecker-8'
-  - 'train_logs/23-07-28_17-04-38_smooth-snail-9'
-  - 'train_logs/23-07-28_16-47-23_qualified-hound-2'
+  - 'train_logs/23-07-31_11-15-03_noisy-manatee-49'
+  - 'train_logs/23-07-31_11-15-00_rugged-falcon-48'
+  - 'train_logs/23-07-31_11-14-59_super-tarsier-47'
+  - 'train_logs/23-07-31_11-14-59_silent-pig-47'
+  - 'train_logs/23-07-31_11-14-58_silver-orangutan-46'
