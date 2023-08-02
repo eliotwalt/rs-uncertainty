@@ -2,6 +2,10 @@ import os
 from pathlib import Path
 import sys
 
+"""
+USAGE:  python src/scripts/s2dir_dirs2dir.py assets/data/sentinel_data/s2_reprojected/ gee_data/${experiment_name}/ ${desired project id, e.g. 1023}
+"""
+
 input_dir = sys.argv[1]
 output_dir = sys.argv[2]
 try:

@@ -2,7 +2,7 @@ s1_reprojected_dir: 'assets/data/sentinel_data/s1_reprojected'
 s2_reprojected_dir: 'assets/data/sentinel_data/s2_reprojected'
 gt_dir: 'assets/data/preprocessed'
 split_mask_dir: 'assets/data/split_masks'
-save_dir: 'data/cp_retraining'
+save_dir: 'data/empirical_cloud_threshold'
 name: 'empirical_cloud_threshold_exp_70'
 project_shapefiles: ['assets/data/NHM_projectDekning_AOI_edit2015_V2.shp', 'assets/data/ALS_projects_Dz_all_norway.shp']
 data_bands: [1, 2, 3, 4, 5] # p95, mean height, density, gini, cover

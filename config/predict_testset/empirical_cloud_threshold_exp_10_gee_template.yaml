@@ -1,18 +1,18 @@
 s1_reprojected_dir: 'assets/data/sentinel_data/s1_reprojected'
-s2_reprojected_dir: 'assets/data/sentinel_data/s2_reprojected'
+s2_reprojected_dir: 'gee_data/reprojected_dirs/${imageId}'
 gt_dir: 'assets/data/preprocessed'
-split_mask_dir: 'assets/data/split_masks'
+split_mask_dir: null # c
 project_shapefiles: ['assets/data/NHM_projectDekning_AOI_edit2015_V2.shp', 'assets/data/ALS_projects_Dz_all_norway.shp']
 data_bands: [1, 2, 3, 4, 5] # p95, mean height, density, gini, cover
 projects: ['1023', '825', '764']
-sampling_strategy: 'valid_center'
+sampling_strategy: 's2_offset_valid_center' # c
 patch_size: 15
 margin: 3  # should be less than 7 to not overlap with train/val stripes
-cloud_prob_threshold: 10
-cloudy_pixels_threshold: 0.01
-pkl_dir: 'data/empirical_cloud_threshold_exp/2023-07-28_15-54-22_empirical_cloud_threshold_exp_10'
-save_dir: 'results/empirical_cloud_threshold_exp/'
-name: 'empirical_cloud_threshold_exp_10'
+pkl_dir: 'data/empirical_cloud_threshold_exp/${now}_empirical_cloud_threshold_exp_10_gee/${imageId}' # c
+save_dir: 'results/empirical_cloud_threshold_exp/${now}_empirical_cloud_threshold_exp_10_gee/${imageId}'
+name: null
+closest_s1: true
+add_date_to_save_dir: false
 checkpoint_dirs:
   - 'train_logs/23-07-31_11-15-04_refreshing-mouse-53'
   - 'train_logs/23-07-31_11-15-03_peculiar-chimpanzee-49'

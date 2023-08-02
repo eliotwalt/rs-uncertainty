@@ -1,5 +1,5 @@
 data:
-  pkl_dir: 'data/cp_retraining/2023-07-28_15-54-22_empirical_cloud_threshold_exp_10'
+  pkl_dir: 'data/empirical_cloud_threshold_exp/2023-07-28_15-54-22_empirical_cloud_threshold_exp_10'
   projects: ['1023', '825', '764']
   s1_image_bands: [1, 2]
   s2_image_bands: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]

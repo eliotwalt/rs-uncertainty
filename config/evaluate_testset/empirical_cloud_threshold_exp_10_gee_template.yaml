@@ -1,0 +1,16 @@
+# tags
+tags: ['empirical_cloud_threshold_exp'] # keep experiment kind as first tag!
+# Variables
+data_bands: [1, 2, 3, 4, 5]
+variable_names: ['P95', 'MeanH', 'Dens', 'Gini', 'Cover']
+# Projects
+projects_east: ['1023', '825', '764']
+# paths
+pkl_dir: 'data/empirical_cloud_threshold_exp/${now}_empirical_cloud_threshold_exp_10_gee/${imageId}' # c
+prediction_dir: 'results/empirical_cloud_threshold_exp/${now}_empirical_cloud_threshold_exp_10_gee/${imageId}' #c
+gt_dir: 'assets/data/preprocessed'
+# metrics config
+num_bins: 1500
+normalize_mean: false
+normalize_variance: false
+upsampling_coeffs: [1, 5, 10, 25]
