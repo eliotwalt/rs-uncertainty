@@ -46,7 +46,7 @@ if [[ $MACHINE == "--euler" ]]; then
         echo "log file is: ${log_f}"
         # make options
         pipelineOptions="${options} --output=${log_f} --error=${log_f}"
-        retvalue=($(sbatch $options /cluster/work/igp_psr/elwalt/pdm/rs-uncertainty/run/slurm/pipeline.sh ${configTriplets[$i]}))
+        retvalue=($(sbatch ${pipelineOptions} /cluster/work/igp_psr/elwalt/pdm/rs-uncertainty/run/slurm/pipeline.sh ${configTriplets[$i]}))
         echo "${retvalue[@]}"
         job_ids+=(${retvalue[-1]})
     done
@@ -64,15 +64,10 @@ else
     # for (( i=0; i<${#configTriplets[@]}; i+=4 ));
     for (( i=0; i<${#configTriplets[@]}; i++ ));
     do
-        # for (( j=i; j<i+4; j+=4 ));
-        # do
-        #     (run_pipeline ${configTriplets[$j]}) &
-        # done
-        # wait
         run_pipeline ${configTriplets[$i]}
     done
 fi 
 
 if [[ $MACHINE == "--euler" ]]; then
-    echo "Job ids: ${job_ids}"
+    echo "Job ids: ${job_ids[@]}"
 fi
