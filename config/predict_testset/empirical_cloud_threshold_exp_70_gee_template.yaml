@@ -19,3 +19,4 @@ checkpoint_dirs: # c
   - 'train_logs/23-07-31_11-14-59_super-tarsier-47'
   - 'train_logs/23-07-31_11-14-59_silent-pig-47'
   - 'train_logs/23-07-31_11-14-58_silver-orangutan-46'
+stats_path: 'data/empirical_cloud_threshold_exp/2023-07-28_15-54-42_empirical_cloud_threshold_exp_70/stats.yaml'

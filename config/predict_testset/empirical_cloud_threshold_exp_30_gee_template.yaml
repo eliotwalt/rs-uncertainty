@@ -19,3 +19,4 @@ checkpoint_dirs:
   - 'train_logs/23-07-31_11-15-03_quaint-skylark-49'
   - 'train_logs/23-07-31_11-15-04_opal-rooster-50'
   - 'train_logs/23-07-31_11-15-03_gentle-numbat-49'
+stats_path: 'data/empirical_cloud_threshold_exp/2023-07-28_15-54-32_empirical_cloud_threshold_exp_30/stats.yaml'

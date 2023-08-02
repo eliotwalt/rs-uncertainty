@@ -19,3 +19,4 @@ checkpoint_dirs:
   - 'train_logs/23-07-31_11-15-03_flashy-chimpanzee-49'
   - 'train_logs/23-07-31_11-14-55_curvy-parrot-45'
   - 'train_logs/23-07-31_11-14-55_analytic-dinosaur-44'
+stats_path: 'data/empirical_cloud_threshold_exp/2023-07-28_15-54-22_empirical_cloud_threshold_exp_10/stats.yaml'

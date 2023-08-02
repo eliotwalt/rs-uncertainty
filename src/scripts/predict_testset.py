@@ -52,9 +52,11 @@ assert run['patch_size'] % 2 == 1, 'Patch size should be odd.'
 with (Path(run['checkpoint_dirs'][0]) / 'config.yaml').open() as fh:
     train_config = yaml.safe_load(fh)
 
-with (Path(run['pkl_dir']) / 'stats.yaml').open() as fh:
-    # load training set statistics for data normalization
-    stats = yaml.safe_load(fh)
+if "stats_path" in run.get_raw_config().keys(): fh = open(run["stats_path"])
+else: (Path(run['pkl_dir']) / 'stats.yaml').open()
+# load training set statistics for data normalization
+stats = yaml.safe_load(fh)
+fh.close()
 
 s2_channels = (np.array(train_config['data']['s2_image_bands']) - 1).astype('int')
 s1_channels = (np.array(train_config['data']['s1_image_bands']) - 1).astype('int')
