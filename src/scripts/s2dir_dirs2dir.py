@@ -1,6 +1,7 @@
 import os 
 from pathlib import Path
 import sys
+import shutil
 
 """
 USAGE:  python src/scripts/s2dir_dirs2dir.py assets/data/sentinel_data/s2_reprojected/ gee_data/${experiment_name}/ ${desired project id, e.g. 1023}
@@ -28,5 +29,5 @@ for project_dir in os.scandir(input_dir):
         imageId = project_dir.name+"_"+img_path.stem.split('_')[3]
         destination = os.path.join(output_dir, imageId, project_dir.name, img_path.name)
         Path(destination).parents[0].mkdir(parents=True, exist_ok=True)
-        os.symlink(img_path, destination)       
-        print(f"Created symlink {img_path} -> {destination}")
+        shutil.copyfile(img_path, destination)       
+        print(f"Copied {img_path} -> {destination}")

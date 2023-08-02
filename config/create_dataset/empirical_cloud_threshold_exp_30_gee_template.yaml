@@ -1,5 +1,5 @@
 s1_reprojected_dir: 'assets/data/sentinel_data/s1_reprojected'
-s2_reprojected_dir: 'gee_data/reprojected_dirs/${imageId}'
+s2_reprojected_dir: 'gee_data/empirical_cloud_threshold_exp/${imageId}'
 gt_dir: 'assets/data/preprocessed'
 split_mask_dir: null
 save_dir: 'data/empirical_cloud_threshold_exp/${now}_empirical_cloud_threshold_exp_30_gee/${imageId}'
