@@ -41,12 +41,15 @@ def main():
         for key, values in cfg.items():
             config[f"{prefix}.{key}"] = values
     # intialize wandb
-    wb_run = wandb.init(
-        project="rcu-evaluation",
-        config=config,
-        name=os.path.basename(cfg["prediction_dir"]),
-        tags=cfg["tags"]
-    )
+    if "disable_wandb" in cfg.keys() and cfg["disable_wandb"]:
+        wb_run = None
+    else:
+        wb_run = wandb.init(
+            project="rcu-evaluation",
+            config=config,
+            name=os.path.basename(cfg["prediction_dir"]),
+            tags=cfg["tags"]
+        )
     # define projects span
     projects = cfg["projects_east"]+cfg["projects_west"]+cfg["projects_north"]
     # Load standardization data
@@ -110,17 +113,18 @@ def main():
     )
     print(f"Serializing StratifiedRCU object to "+str(pjoin(cfg["prediction_dir"], "rcu.json"))+"...")
     rcu.save_json(pjoin(cfg["prediction_dir"], "rcu.json"))
-    # log rcu json
-    print(f"Logging serialized StratifiedRCU...")
-    wb_run.save(str(pjoin(cfg["prediction_dir"], "rcu.json")))
-    # log metrics for each group, variable and kind
-    log_df = rcu.results.copy()
-    log_df["key"] = log_df.apply(lambda x: "-".join([x["kind"], x["metric"], x["variable"], x["group"]]), axis=1)
-    log_df = log_df[["key", "x"]]
-    print(f"Logging {len(log_df)} metrics...")
-    wb_run.log({key: value for key, value in zip(log_df.key, log_df.x)})
-    # close
-    print("Finishing run...")
-    wb_run.finish()
+    if wb_run is not None:
+        # log rcu json
+        print(f"Logging serialized StratifiedRCU...")
+        wb_run.save(str(pjoin(cfg["prediction_dir"], "rcu.json")))
+        # log metrics for each group, variable and kind
+        log_df = rcu.results.copy()
+        log_df["key"] = log_df.apply(lambda x: "-".join([x["kind"], x["metric"], x["variable"], x["group"]]), axis=1)
+        log_df = log_df[["key", "x"]]
+        print(f"Logging {len(log_df)} metrics...")
+        wb_run.log({key: value for key, value in zip(log_df.key, log_df.x)})
+        # close
+        print("Finishing run...")
+        wb_run.finish()
 
 if __name__ == "__main__": main()

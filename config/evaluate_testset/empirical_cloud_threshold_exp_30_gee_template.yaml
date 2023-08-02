@@ -14,3 +14,4 @@ num_bins: 1500
 normalize_mean: false
 normalize_variance: false
 upsampling_coeffs: [1, 5, 10, 25]
+disable_wandb: true
