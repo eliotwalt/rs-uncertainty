@@ -11,8 +11,8 @@ EVAL_CONFIG=$3
 echo "Setting up env"
 PYVERSION=3.7.4
 GDALVESION=3.4.3
-module load python/$PYVERSION gdal/$GDALVERSION
-pip install gdal==`gdal-config --version` --user # do not put it in requirements, the version must match local install!
+module load python/$PYVERSION #gdal/$GDALVERSION
+# pip install gdal==`gdal-config --version` --user # do not put it in requirements, the version must match local install!
 pip install -r requirements.txt --user
 
 # **************************************************** COMMAND ***************************************************
