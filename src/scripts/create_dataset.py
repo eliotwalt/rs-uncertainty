@@ -290,7 +290,7 @@ class ProjectsPreprocessor:
         # read s2
         print(f"[debug:291] s2 reprojected dir: {os.path.abspath(os.path.join(self.run['s2_reprojected_dir'], str(project_id)))} (exists={os.path.exists(self.run['s2_reprojected_dir'])})")
         for img_path in pjoin(self.run['s2_reprojected_dir'], str(project_id)).glob('*.tif'):
-            print(f"[debug:293] img_path: {img_path} (exists={os.path.exists(img_path)})")
+            print(f"[debug:293] img_path: {os.path.abspath(img_path)} (exists={os.path.exists(img_path)})")
             with rasterio.open(img_path) as fh:
                 s2_images.append((fh.read(fh.indexes), parse_date(img_path.stem.split('_')[3].split('T')[0])))
         # read s1
