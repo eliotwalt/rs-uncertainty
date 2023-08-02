@@ -53,8 +53,12 @@ def main():
     # define projects span
     projects = cfg["projects_east"]+cfg["projects_west"]+cfg["projects_north"]
     # Load standardization data
-    with pjoin(cfg["pkl_dir"], "stats.yaml").open("r", encoding="utf-8") as f:
-        stats = yaml.safe_load(f)
+    if "stats_path" in cfg.keys():
+        with Path(cfg["stats_path"]).open("r", encoding="utf-8") as f:
+            stats = yaml.safe_load(f)
+    else:
+        with pjoin(cfg["pkl_dir"], "stats.yaml").open("r", encoding="utf-8") as f:
+            stats = yaml.safe_load(f)
     labels_mean = np.array(stats["labels_stats"]["mean"]).reshape(5,1,1)
     labels_std = np.array(stats["labels_stats"]["std"]).reshape(5,1,1)
     # loop on projects to get variance bounds

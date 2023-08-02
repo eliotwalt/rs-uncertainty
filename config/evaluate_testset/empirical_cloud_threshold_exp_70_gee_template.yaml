@@ -9,6 +9,7 @@ projects_east: ['1023', '825', '764']
 pkl_dir: 'data/empirical_cloud_threshold_exp/${now}_empirical_cloud_threshold_exp_70_gee/${imageId}' # c
 prediction_dir: 'results/empirical_cloud_threshold_exp/${now}_empirical_cloud_threshold_exp_70_gee/${imageId}' #c
 gt_dir: 'assets/data/preprocessed'
+stats_path: 'data/empirical_cloud_threshold_exp/2023-07-28_15-54-42_empirical_cloud_threshold_exp_70/stats.yaml'
 # metrics config
 num_bins: 1500
 normalize_mean: false
