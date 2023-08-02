@@ -117,7 +117,7 @@ def main():
         rcu.add_project(project, gt, mean, variance)
     print(f"Computing result dataframe")
     rcu.get_results_df(
-        groups={"east": cfg["projects_east"], "west": cfg["projects_west"], "north": cfg["projects_north"]},
+        groups=groups,
         variable_names=cfg["variable_names"]
     )
     print(f"Serializing StratifiedRCU object to "+str(pjoin(cfg["prediction_dir"], "rcu.json"))+"...")
