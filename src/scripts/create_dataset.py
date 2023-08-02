@@ -75,8 +75,6 @@ class ProjectsPreprocessor:
         self.run.seed_all(self.seed)
         # save directory
         self.save_dir = self.run["save_dir"]
-        if self.run["add_date_to_save_dir"]:
-            save_dir = pjoin(save_dir, )
         Path(self.save_dir).mkdir(parents=True, exist_ok=True)
         # create dataset
         self.prange = trange

@@ -42,6 +42,7 @@ if [[ $MACHINE == "--euler" ]]; then
         log_f=/cluster/work/igp_psr/elwalt/logs/pipeline/$log_name.log
         mkdir -p $(dirname $log_f)
         touch log_f
+        echo "log file is: ${log_f}"
         # make options
         pipelineOptions="${options} --output=${log_f} --error=${log_f}"
         retvalue=($(sbatch $options /cluster/work/igp_psr/elwalt/pdm/rs-uncertainty/run/slurm/pipeline.sh ${configTriplets[$i]}))
