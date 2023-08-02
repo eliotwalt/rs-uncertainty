@@ -44,7 +44,7 @@ if not "add_date_to_save_dir" in run.get_raw_config().keys() or run["add_date_to
     save_dir = Path(run["save_dir"]) / (datetime.now().strftime('%Y-%m-%d_%H-%M-%S') + (f'_{run["name"]}' if run['name'] else ''))
 else:
     save_dir = Path(run["save_dir"]) / (f'_{run["name"]}' if run['name'] else '')
-save_dir.mkdir(parents=True)
+save_dir.mkdir(parents=True, exist_ok=True)
 print(f"Results will be saved to: {str(save_dir)}")
 
 assert run['patch_size'] % 2 == 1, 'Patch size should be odd.'
