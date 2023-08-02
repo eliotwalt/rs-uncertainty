@@ -52,8 +52,11 @@ def main():
         )
     # define projects span
     projects = []
+    groups = {}
     for key in ["projects_east", "projects_west", "projects_north"]:
-        if key in cfg.keys() and isinstance(cfg[key], list) and len(cfg[key])>0: projects += cfg[key]
+        if key in cfg.keys() and isinstance(cfg[key], list) and len(cfg[key])>0: 
+            projects += cfg[key]
+            groups[key.split("_")[1]] = cfg[key]
     # Load standardization data
     if "stats_path" in cfg.keys():
         with Path(cfg["stats_path"]).open("r", encoding="utf-8") as f:
