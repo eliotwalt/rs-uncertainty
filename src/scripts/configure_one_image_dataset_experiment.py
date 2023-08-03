@@ -51,7 +51,8 @@ if __name__ == "__main__":
     check_integrity(create_config, predict_config, eval_config)
     # Loop on single image dirs
     for imageDir in os.scandir(Path(create_config["s2_reprojected_dir"]).parents[0]):
-        td = Path(f"{tmp_dir}/1imgds_{imageDir.name}")
+        experiment_name = "_".join(create_config["save_dir"].split("/")[-2].split("_")[1:])
+        td = Path(f"{tmp_dir}/1imgds_{imageDir.name}_{experiment_name}")
         if os.path.isdir(td): shutil.rmtree(td)
         td.mkdir()
         subcreate_config, subpredict_config, subeval_config = deepcopy(create_config), deepcopy(predict_config), deepcopy(eval_config)
