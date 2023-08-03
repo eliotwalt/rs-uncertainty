@@ -11,7 +11,7 @@ data:
   subsample: 0.05
   loader_args:
     pin_memory: true
-    batch_size: 310
+    batch_size: 80
     num_workers: 2
 
 model:
@@ -27,7 +27,7 @@ training:
   deterministic: true
   resume_checkpoint: null
   epochs: 100
-  lr: 0.00048
+  lr: 0.000125
   weight_decay: 0.001
   use_wandb_logger: true
   # use_wandb_logger: false
