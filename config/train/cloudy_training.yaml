@@ -11,7 +11,7 @@ data:
   subsample: 0.05
   loader_args:
     pin_memory: true
-    batch_size: 305
+    batch_size: 204
     num_workers: 2
 
 model:
