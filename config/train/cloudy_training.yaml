@@ -11,8 +11,8 @@ data:
   subsample: 0.05
   loader_args:
     pin_memory: true
-    batch_size: 80
-    num_workers: 2
+    batch_size: 205
+    num_workers: 8
 
 model:
   type: resnext
@@ -27,7 +27,7 @@ training:
   deterministic: true
   resume_checkpoint: null
   epochs: 100
-  lr: 0.000125
+  lr: 0.00032
   weight_decay: 0.001
   use_wandb_logger: true
   # use_wandb_logger: false
