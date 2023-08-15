@@ -72,54 +72,67 @@ class ExperimentVisualizer():
         if ax is None:
             fig, ax = plt.subplots()
         var_idx = self.variable_names.index(variable)
-        hdf = pd.DataFrame(columns=[self.exp_var_name, "probability", "variance"])
+        hdf = pd.DataFrame(columns=[self.exp_var_name, "probability", "binned predictive uncertainty"])
         for i, rcu in enumerate(self.rcus):
             H = np.nansum(rcu.histogram[0,var_idx], axis=0)
             ct = np.full(H.shape, str(self.exp_vars[i]))
-            bins = rcu.histogram.bins[var_idx]
-            hdf = pd.concat([hdf, pd.DataFrame({self.exp_var_name: ct, "probability": H/np.nansum(H), "variance": bins})])
-            hdf = hdf[hdf.variance<hi_bound]
-        hhdf = hdf.groupby(["variance", self.exp_var_name]).sum().reset_index()
+            bins = np.sqrt(rcu.histogram.bins[var_idx])
+            hdf = pd.concat([hdf, pd.DataFrame({self.exp_var_name: ct, "probability": H/np.nansum(H), "binned predictive uncertainty": bins})])
+            hdf = hdf[hdf["binned predictive uncertainty"]<hi_bound]
+        hhdf = hdf.groupby(["binned predictive uncertainty", self.exp_var_name]).sum().reset_index()
         hhdf = hhdf.sort_values(by=[self.exp_var_name])
         if palette is not None: kwargs = {"palette": palette}
         else: kwargs = {}
-        g = sns.lineplot(data=hhdf, x="variance", hue=self.exp_var_name, y="probability", ax=ax, alpha=0.5, **kwargs)
+        g = sns.lineplot(data=hhdf, x="binned predictive uncertainty", hue=self.exp_var_name, y="probability", ax=ax, alpha=0.5, **kwargs)
         if log: 
             ax.set_xscale("log")
-            ax.set_xlabel("log variance")
+            ax.set_xlabel("log binned predictive uncertainty")
         if not show_legend:
             ax.get_legend().remove()
             cmap = sns.color_palette("bwr")
             b, r = cmap[0], cmap[-1]
-            cols = ["variance", "probability", self.exp_var_name]
-            hhdf[cols[-1]] = hhdf[cols[-1]].astype("float")
-            max_expvar_data = hhdf[hhdf[cols[-1]]==hhdf[cols[-1]].max()].sort_values(by=cols[0])
-            ax.plot(max_expvar_data[cols[0]],max_expvar_data[cols[1]],color=r,label=f"maximum {self.exp_var_name}: {max_expvar_data[cols[-1]].values[0]:.2f}%", alpha=0.75)
-            min_expvar_data = hhdf[hhdf[cols[-1]]==hhdf[cols[-1]].min()].sort_values(by=cols[0])
-            ax.plot(min_expvar_data[cols[0]],min_expvar_data[cols[1]],color=b,label=f"minimum {self.exp_var_name}: {min_expvar_data[cols[-1]].values[0]:.2f}%", alpha=0.75)
+            argmax_expvar = np.argmax(self.exp_vars)
+            max_rcu = self.rcus[argmax_expvar]
+            prob = np.nansum(max_rcu.histogram[0,var_idx], axis=0)/np.nansum(max_rcu.histogram[0,var_idx])
+            bins = max_rcu.histogram.bins[var_idx]
+            mask = bins<hi_bound
+            bins, prob = bins[mask], prob[mask]
+            ax.plot(bins, prob, color=r, label=f"maximum: {self.exp_vars[argmax_expvar]:.2f}%", alpha=1)
+            argmin_expvar = np.argmin(self.exp_vars)
+            min_rcu = self.rcus[argmin_expvar]
+            prob = np.nansum(min_rcu.histogram[0,var_idx], axis=0)/np.nansum(min_rcu.histogram[0,var_idx])
+            bins = min_rcu.histogram.bins[var_idx]
+            mask = bins<hi_bound
+            bins, prob = bins[mask], prob[mask]
+            ax.plot(bins, prob, color=b, label=f"minimum: {self.exp_vars[argmin_expvar]:.2f}%", alpha=1)
             handles, labels = ax.get_legend_handles_labels()
             ax.legend([handle for i,handle in enumerate(handles[-2:])],
                     [label for i,label in enumerate(labels[-2:])],
+                    title="average cloud probability",
                     loc= 'best')
         else:
             ax.legend(loc="upper right")
         return ax
     
-    def histogram_plot(self, hi_bounds=np.inf, log=True, figsize=(12, 18), save_name=None, **kwargs):
-        if not isinstance(hi_bounds, list): hi_bounds = [hi_bounds for _ in range(len(self.variable_names))]
-        num_variables = len(self.variable_names)
+    def histogram_plot(self, hi_bounds=np.inf, log=True, figsize=(12, 18), save_name=None, fig_ncols=None, variables=None, **kwargs):
+        if variables is None: variables = self.variable_names
+        if not isinstance(hi_bounds, list): hi_bounds = [hi_bounds for _ in range(len(variables))]
+        num_variables = len(variables)
+        if fig_ncols is not None:
+            previous_ncols = self.fig_ncols
+            self.fig_ncols = fig_ncols
         ncols = self.fig_ncols
         nrows = 1 if self.fig_ncols>=num_variables else math.ceil(num_variables/self.fig_ncols)
         fig, axs = plt.subplots(nrows=nrows, ncols=ncols, figsize=figsize)
         axs = axs.flatten()
-        for i, var in enumerate(self.variable_names):
+        for i, var in enumerate(variables):
             self.variable_histogram_plot(var, axs[i], hi_bounds[i], log, **kwargs)
             axs[i].set_title(var)
         if num_variables%self.fig_ncols!=0: fig.delaxes(axs.flatten()[-1])
-        if save_name is not None: 
-            fig.tight_layout()
-            savefigure(fig, save_name)
-        return axs
+        if fig_ncols is not None: self.fig_ncols = previous_ncols
+        fig.tight_layout()
+        if save_name is not None: savefigure(fig, save_name)
+        plt.show()
 
     def variable_metric_plot(self, metric, variable, kind, ax=None):
         if ax is None:
@@ -150,10 +163,9 @@ class ExperimentVisualizer():
         fig.suptitle(metric)
         if num_variables%self.fig_ncols!=0: fig.delaxes(axs.flatten()[-1])
         if fig_ncols is not None: self.fig_ncols = previous_ncols
-        if save_name is not None: 
-            fig.tight_layout()
-            savefigure(fig, save_name)
-        return axs
+        fig.tight_layout()
+        if save_name is not None: savefigure(fig, save_name)
+        plt.show()
 
     def variable_metric_boxplot(self, metric, variable, kind, exp_var_bins=None, ax=None, fig_ncols=None):
         if ax is None:
@@ -167,7 +179,7 @@ class ExperimentVisualizer():
         else:
             bin_strings = [f"{exp_var_bins[i]}-{exp_var_bins[i+1]}" for i in range(len(exp_var_bins)-1)]
             gvmdf.loc[:,self.exp_var_name] = [bin_strings[i-1] for i in np.digitize(gvmdf[self.exp_var_name].values, bins=exp_var_bins)]
-            sns.boxplot(data=gvmdf, y="x", x=self.exp_var_name, ax=ax, order=bin_strings, showfliers=False)
+            sns.boxplot(data=gvmdf, y="x", x=self.exp_var_name, ax=ax, order=bin_strings, showfliers=False, color=sns.color_palette()[0])
         ax.set_ylabel(metric)
         return ax
 
@@ -186,11 +198,15 @@ class ExperimentVisualizer():
             axs[i].set_ylabel("")
         fig.suptitle(metric)
         if num_variables%self.fig_ncols!=0: fig.delaxes(axs.flatten()[-1])
-        if fig_ncols is not None: self.fig_ncols = previous_ncols
-        if save_name is not None: 
-            fig.tight_layout()
-            savefigure(fig, save_name)
-        return axs
+        if fig_ncols is not None: 
+            self.fig_ncols = previous_ncols
+            if fig_ncols > 2: 
+                for ax in axs:
+                    for tick in ax.get_xticklabels():
+                        tick.set_rotation(45)
+        fig.tight_layout()
+        if save_name is not None: savefigure(fig, save_name)
+        plt.show()
     
     def variable_calibration_plot(self, metric, variable, k=100, log_bins=False, ax=None, hi_bound=np.inf, palette=None, show_legend=True):
         bin_type = "log" if log_bins else "linear"
@@ -200,7 +216,7 @@ class ExperimentVisualizer():
         assert metric in ["uce", "ence", "auce"]
         if metric == "uce": cols = ["bin variance", "bin mse", self.exp_var_name]
         elif metric == "auce": cols = ["expected accuracy", "empirical accuracy", self.exp_var_name]
-        else: cols = ["bin std", "bin rmse", self.exp_var_name]
+        else: cols = ["binned predictive uncertainty", "binned RMSE", self.exp_var_name]
         ccdf = pd.DataFrame(columns=cols)
         for i, rcu in enumerate(self.rcus):
             lorcu = rcu.upsample(k, bin_type=bin_type)
@@ -224,24 +240,42 @@ class ExperimentVisualizer():
         if not show_legend:
             cmap = sns.color_palette("bwr")
             r, b = cmap[0],cmap[-1]
-            ax.get_legend().remove()
-            ccdf[cols[-1]] = ccdf[cols[-1]].astype("float")
-            max_expvar_data = ccdf[ccdf[cols[-1]]==ccdf[cols[-1]].max()].sort_values(by=cols[0])
-            ax.plot(max_expvar_data[cols[0]],max_expvar_data[cols[1]],color=b,label=f"maximum {self.exp_var_name}: {max_expvar_data[cols[-1]].values[0]:.2f}%", alpha=0.75)
-            min_expvar_data = ccdf[ccdf[cols[-1]]==ccdf[cols[-1]].min()].sort_values(by=cols[0])
-            ax.plot(min_expvar_data[cols[0]],min_expvar_data[cols[1]],color=r,label=f"minimum {self.exp_var_name}: {min_expvar_data[cols[-1]].values[0]:.2f}%", alpha=0.75)
+            try: ax.get_legend().remove()
+            except: pass
+            # ccdf[cols[-1]] = ccdf[cols[-1]].astype("float")
+            # Compute max
+            argmax_expvar = np.argmax(self.exp_vars)
+            max_rcu = self.rcus[argmax_expvar]
+            max_rcu = max_rcu.upsample(k, bin_type=bin_type)
+            xc, yc = max_rcu.get_calibration_curve(metric)
+            if metric != "auce": xc = xc[var_idx]; yc = yc[var_idx]
+            mask = xc<hi_bound
+            xc, yc = xc[mask], yc[mask]
+            ax.plot(xc, yc, color=b, label=f"maximum: {self.exp_vars[argmax_expvar]:.2f}%", alpha=1)
+            # Compute min
+            argmin_expvar = np.argmin(self.exp_vars)
+            min_rcu = self.rcus[argmin_expvar]
+            min_rcu = min_rcu.upsample(k, bin_type=bin_type)
+            xc, yc = min_rcu.get_calibration_curve(metric)
+            if metric != "auce": xc = xc[var_idx]; yc = yc[var_idx]
+            mask = xc<hi_bound
+            xc, yc = xc[mask], yc[mask]
+            ax.plot(xc, yc, color=r, label=f"minimum: {self.exp_vars[argmin_expvar]:.2f}%", alpha=1)
             handles, labels = ax.get_legend_handles_labels()
             ax.legend([handle for i,handle in enumerate(handles[-2:])],
                     [label for i,label in enumerate(labels[-2:])],
+                    title="average cloud probability",
                     loc= 'best')
         else:
             ax.legend(loc="upper right")
         # ax.vlines(x=xc, ymin=lo, ymax=hi/5, color="black", ls="dashed")
         return ax
     
-    def calibration_plot(self, metric, k=100, log_bins=False, hi_bounds=np.inf, figsize=(12, 18), fig_ncols=None, save_name=None, **kwargs):
+    def calibration_plot(self, metric, k=100, log_bins=False, hi_bounds=np.inf, figsize=(12, 18), fig_ncols=None, save_name=None, variables=None, **kwargs):
         if not isinstance(hi_bounds, list): hi_bounds = [hi_bounds for _ in range(len(self.variable_names))]
-        num_variables = len(self.variable_names)
+        if variables is None:
+            variables = self.variable_names 
+        num_variables = len(variables)
         if fig_ncols is not None:
             previous_ncols = self.fig_ncols
             self.fig_ncols = fig_ncols
@@ -249,16 +283,15 @@ class ExperimentVisualizer():
         nrows = 1 if self.fig_ncols>=num_variables else math.ceil(num_variables/self.fig_ncols)
         fig, axs = plt.subplots(nrows=nrows, ncols=ncols, figsize=figsize)
         axs = axs.flatten()
-        for i, var in enumerate(self.variable_names):
+        for i, var in enumerate(variables):
             self.variable_calibration_plot(metric, var, k=k, log_bins=log_bins, ax=axs[i], hi_bound=hi_bounds[i], **kwargs)
             axs[i].set_title(var)
-        fig.suptitle(metric+" calibration plot")
+        # fig.suptitle(metric+" calibration plot")
         if num_variables%self.fig_ncols!=0: fig.delaxes(axs.flatten()[-1])
         if fig_ncols is not None: self.fig_ncols = previous_ncols
-        if save_name is not None: 
-            fig.tight_layout()
-            savefigure(fig, save_name)
-        return axs
+        fig.tight_layout()
+        if save_name is not None: savefigure(fig, save_name)
+        plt.show()
 
 def getPaths(
     src_dir, 
@@ -397,8 +430,8 @@ def get_nonzero_avg_cp_visualizer(result_dirs, s2repr_dirs, variable_names, max_
     )
     return visualizer, selected_nnz_result_dirs, selected_exp_vars
 
-def showSplit(gt_path, split_mask, islices, jslices, 
-              patch_colors=["r", "b"], save_name=None):
+def showSplit(gt_path, split_mask, islices=None, jslices=None, 
+              patch_colors=None, save_name=None):
     reverse_split_mask = split_mask.copy()
     reverse_split_mask[split_mask==0] = 2
     reverse_split_mask[split_mask==2] = 0
@@ -418,18 +451,19 @@ def showSplit(gt_path, split_mask, islices, jslices,
                     alpha=0.3)
     g = sns.heatmap(gt, cmap="Greys", ax=g, cbar=False)
     # g = sns.heatmap(gt, cmap="Greys", cbar=False)
-    assert len(islices)==len(jslices)==len(patch_colors)
-    for i, (islc, jslc) in enumerate(zip(islices, jslices)):
-        g.add_patch(
-            patches.Rectangle(
-                (jslc.start, islc.start), # top left corner
-                jslc.stop-jslc.start, # positive width
-                islc.stop-islc.start, # positive height
-                linewidth=2,
-                fill=False,
-                color=patch_colors[i]
+    if islices is not None:
+        assert len(islices)==len(jslices)==len(patch_colors)
+        for i, (islc, jslc) in enumerate(zip(islices, jslices)):
+            g.add_patch(
+                patches.Rectangle(
+                    (jslc.start, islc.start), # top left corner
+                    jslc.stop-jslc.start, # positive width
+                    islc.stop-islc.start, # positive height
+                    linewidth=2,
+                    fill=False,
+                    color=patch_colors[i]
+                )
             )
-        )
     g.set_axis_off()
     # modify colorbar:
     colorbar = g.collections[0].colorbar 
@@ -969,17 +1003,6 @@ def showPredictionMaps(dirs, titles, variable_index, variable_name, s2repr_dirs,
         if variable_index in [3,5]: gt /= 100 # Cover/Dens normalization!!
         mean = loadRaster(mean_path, bands=variable_index, islice=islice, jslice=jslice)
         predictive_std = loadRaster(variance_path, bands=variable_index, islice=islice, jslice=jslice, elementwise_fn=np.sqrt)
-        # if normalize:
-        #     # get stats
-        #     rgbmax, rgbmin = np.nanmax(rgb, axis=(0,1)), np.nanmin(rgb, axis=(0,1))
-        #     gtmax, gtmin = np.nanmax(gt), np.nanmin(gt)
-        #     variancemax, variancemin = np.nanmax(variance), np.nanmin(variance)
-        #     # apply
-        #     rgb = norm2d(rgb, rgbmin, rgbmax)
-        #     gt = norm2d(gt, gtmin, gtmax)
-        #     mean = norm2d(mean, gtmin, gtmax)
-        #     # variance = norm2d(variance, variancemin, variancemax)
-        #     variance = norm2d(variance, gtmin**2, gtmax**2)
         if normalize:
             gt, mean, predictive_std = multiNorm2d(gt, mean, predictive_std)
             vmin, vmax = 0, 1
@@ -996,18 +1019,57 @@ def showPredictionMaps(dirs, titles, variable_index, variable_name, s2repr_dirs,
         sns.heatmap(gt, ax=axs[i,1], vmin=vmin, vmax=vmax)
         if i==0: axs[i,1].set_title(f"ground truth\n({gt_date.strftime('%d.%m.%Y')})")
         sns.heatmap(mean, ax=axs[i,2], vmin=vmin, vmax=vmax)
-        if i==0: axs[i,2].set_title(f"mean")
+        if i==0: axs[i,2].set_title(f"predicted\nmean")
         sns.heatmap(predictive_std, ax=axs[i,3], vmin=pubounds[0], vmax=pubounds[1])
         if i==0: axs[i,3].set_title(f"predictive\nuncertainty")
         sns.heatmap(rerror, ax=axs[i,4], cmap="bwr", vmin=-rbound, vmax=rbound)
-        if i==0: axs[i,4].set_title(f"r-error")
+        if i==0: axs[i,4].set_title(f"regression\nresiduals")
         sns.heatmap(cerror, ax=axs[i,5], cmap="bwr", vmin=-cbound, vmax=cbound)
-        if i==0: axs[i,5].set_title(f"c-error")
+        if i==0: axs[i,5].set_title(f"calibration\nresiduals")
     for ax in axs.flatten(): 
         ax.set_xticks([])
         ax.set_yticks([])
     for i, d, in enumerate(dirs):
         axs[i,0].set_ylabel(f'{titles[i]}\n({datetime.strptime(Path(d).name.split("_")[1].split("T")[0], "%Y%m%d").strftime("%d.%m.%Y")})')
+    fig.suptitle(variable_name)
+    plt.tight_layout()
+    if save_name is not None: savefigure(fig, save_name)
+    plt.show()
+
+def showRegressionMaps(dirs, titles, variable_index, variable_name, s2repr_dirs, gt_dir, 
+                        shapefile_paths, islice=None, jslice=None, normalize=False, save_name=None,
+                        rerror_bounds=None, figsize=(15,7.5), **kwargs):
+    fig, axs = plt.subplots(ncols=len(titles), nrows=4, figsize=figsize)
+    for i, d in enumerate(dirs):
+        dir_name = d.split("/")[-1]
+        pid = dir_name.split("_")[0]
+        gt_date = compute_gt_date(pid, shapefile_paths)
+        img_path, mean_path, gt_path = getPaths(d, s2repr_dirs, gt_dir, returns=["img","mean","gt"])
+        # load rasters
+        rgb = loadRaster(img_path, bands=[4,3,2], transpose_order=(1,2,0), clip_range=(100, 2000), islice=islice, jslice=jslice)
+        gt = loadRaster(gt_path, bands=variable_index, islice=islice, jslice=jslice, set_nan_mask=True)
+        if variable_index in [3,5]: gt /= 100 # Cover/Dens normalization!!
+        mean = loadRaster(mean_path, bands=variable_index, islice=islice, jslice=jslice)
+        if normalize:
+            gt, mean = multiNorm2d(gt, mean)
+            vmin, vmax = 0, 1
+        else:
+            vmin, vmax = multiMinMax(gt, mean)
+        rerror = mean-gt
+        rbound = np.nanmax(np.abs(rerror)) if rerror_bounds is None else rerror_bounds[variable_index-1]
+        axs[0,i].imshow(rgb)
+        if i==0: axs[0,i].set_title(f"RGB")
+        sns.heatmap(gt, ax=axs[1,i], vmin=vmin, vmax=vmax)
+        if i==0: axs[1,i].set_title(f"ground truth\n({gt_date.strftime('%d.%m.%Y')})")
+        sns.heatmap(mean, ax=axs[2,i], vmin=vmin, vmax=vmax)
+        if i==0: axs[2,i].set_title(f"predicted\nmean")
+        sns.heatmap(rerror, ax=axs[i,3], cmap="bwr", vmin=-rbound, vmax=rbound)
+        if i==0: axs[i,3].set_title(f"regression\nresiduals")
+    for ax in axs.flatten(): 
+        ax.set_xticks([])
+        ax.set_yticks([])
+    for i, d, in enumerate(dirs):
+        axs[0,i].set_ylabel(f'{titles[i]}\n({datetime.strptime(Path(d).name.split("_")[1].split("T")[0], "%Y%m%d").strftime("%d.%m.%Y")})')
     fig.suptitle(variable_name)
     plt.tight_layout()
     if save_name is not None: savefigure(fig, save_name)
@@ -1247,8 +1309,145 @@ def showSinglePredictionMaps(dir_, title, variable_index, variable_name, s2repr_
     plt.tight_layout()
     if save_name is not None: savefigure(fig, save_name)
     plt.show()
+
+def computeExplodedResiduals(result_dirs, gt_dir, s2repr_dirs, variable_names,
+                 islice=None, jslice=None, num_bins=15):
+    # Compute residual bounds and average cps
+    means_bounds = [[np.inf, -np.inf] for _ in variable_names]
+    for rd in result_dirs:
+        gtp, mp = getPaths(rd, s2repr_dirs=s2repr_dirs, gt_dir=gt_dir, returns=["gt", "mean"])
+        gt = loadRaster(gtp, bands=None, islice=islice, jslice=jslice, set_nan_mask=True)
+        gt[2] /= 100
+        gt[4] /= 100
+        mean = loadRaster(mp,bands=None, islice=islice, jslice=jslice)
+        mask = np.bitwise_and(~np.isnan(mean).all(0), ~np.isnan(gt).all(0))
+        mean = mean[:,mask]
+        for i, (rmin, rmax) in enumerate(means_bounds):
+            local_min, local_max = np.nanmin(mean[i]), np.nanmax(mean[i])
+            if local_min < rmin: means_bounds[i][0] = local_min
+            if local_max > rmax: means_bounds[i][1] = local_max
+    # Define bins
+    bins = np.stack([
+        np.linspace(rmin, rmax, num_bins)
+        for rmin, rmax in means_bounds
+    ], axis=0)
+    # Fill bins
+    bin_counts = np.zeros((len(result_dirs), len(variable_names), num_bins))
+    bin_means = np.zeros((len(result_dirs), len(variable_names), num_bins))
+    bin_gts = np.zeros((len(result_dirs), len(variable_names), num_bins))
+    for k, rd in enumerate(result_dirs):
+        # load
+        gtp, mp = getPaths(rd, s2repr_dirs=s2repr_dirs, gt_dir=gt_dir, returns=["gt", "mean"])
+        gt = loadRaster(gtp, bands=None, islice=islice, jslice=jslice, set_nan_mask=True)
+        gt[2] /= 100
+        gt[4] /= 100
+        mean = loadRaster(mp,bands=None, islice=islice, jslice=jslice)
+        mask = np.bitwise_and(~np.isnan(mean).all(0), ~np.isnan(gt).all(0))
+        gt = gt[:,mask]
+        mean = mean[:,mask]
+        # digitize
+        bin_ids = np.stack(
+            [np.digitize(mean[i], bins=bins[i])-1 for i in range(len(variable_names))],
+            axis=0            
+        )
+        # insert in bins: running average
+        for bin_id in range(num_bins):
+            mask = (bin_ids==bin_id)
+            for i, variable_mask in enumerate(mask):
+                count = mask[i].sum()
+                if count==0: continue
+                bin_means[k,i,bin_id] = (bin_counts[k,i,bin_id]*bin_means[k,i,bin_id] + np.nansum(mean[i,variable_mask])) / (bin_counts[k,i,bin_id]+count)
+                bin_gts[k,i,bin_id] = (bin_counts[k,i,bin_id]*bin_gts[k,i,bin_id] + np.nansum(gt[i,variable_mask])) / (bin_counts[k,i,bin_id]+count)
+                bin_counts[k,i,bin_id] += count
+    return bin_means, bin_gts, bin_counts
+
+def explodedRMSEplot(bin_means, bin_gts, variable_names, variable_indexes, avg_cps, figsize=(12,6), ncols=2, save_name=None, hi_bound=np.inf):
+    if not isinstance(hi_bound, list): hi_bound = [hi_bound for _ in variable_names]
+    nrows = max(1, len(variable_names)//ncols)
+    fig, axs = plt.subplots(ncols=ncols,nrows=nrows,figsize=figsize)
+    axs = axs.flatten()
+    assert len(variable_names)==len(variable_indexes)
+    num_bins = bin_means.shape[-1]
+    for i, (varname, varindex) in enumerate(zip(variable_names, variable_indexes)):
+        # select variable
+        bmean, bgt = bin_means[:,varindex], bin_gts[:,varindex] # num_images x num_bins
+        # construct dataframe
+        data = {
+            "average cloud probability": [],
+            "binned ground truth": [],
+            "binned mean": [],
+        }
+        for k in range(len(avg_cps)): # loop over images to fill data
+            data["average cloud probability"].extend([avg_cps[k] for _ in range(num_bins)])
+            bgtk, bmeank = zip(*sorted(zip(bgt[k],bmean[k]), key=lambda v:v[0]))
+            data["binned ground truth"].extend(list(bgtk))
+            data["binned mean"].extend(list(bmeank))
+        data = pd.DataFrame(data)
+        data = data.sort_values(by="average cloud probability")
+        data = data[data["binned ground truth"]<hi_bound[i]]
+        lo = min(data["binned ground truth"].min(), data["binned mean"].min())
+        hi = min(data["binned ground truth"].max(), data["binned mean"].max())
+        id_line = (
+            np.linspace(lo, hi, 2), 
+            np.linspace(lo, hi, 2)
+        )
+        axs[i].plot(*id_line, color="black", linestyle="dotted")
+        sns.lineplot(data, x="binned ground truth", y="binned mean", palette="bwr", hue="average cloud probability", ax=axs[i], alpha=0.3)
+        axs[i].legend().remove()
+        axs[i].set_title(varname)
+        cmap = sns.color_palette("bwr")
+        b, r = cmap[0], cmap[-1]
+        kmax = np.argmax(avg_cps)
+        bgtk, bmeank = zip(*sorted(zip(bgt[kmax],bmean[kmax]), key=lambda v:v[0]))
+        bgtk, bmeank = np.array(bgtk), np.array(bmeank)
+        mask = bgtk<hi_bound[i]
+        bgtk, bmeank = bgtk[mask], bmeank[mask]
+        axs[i].plot(bgtk, bmeank, color=r, label=f"maximum: {avg_cps[kmax]:.2f}%")
+        kmin = np.argmin(avg_cps)
+        bgtk, bmeank = zip(*sorted(zip(bgt[kmin],bmean[kmin]), key=lambda v:v[0]))
+        bgtk, bmeank = np.array(bgtk), np.array(bmeank)
+        mask = bgtk<hi_bound[i]
+        bgtk, bmeank = bgtk[mask], bmeank[mask]        
+        axs[i].plot(bgtk, bmeank, color=b, label=f"minimum: {avg_cps[kmin]:.2f}%")
+        handles, labels = axs[i].get_legend_handles_labels()
+        axs[i].legend([handle for i,handle in enumerate(handles[-2:])],
+                    [label for i,label in enumerate(labels[-2:])],
+                    title="average cloud probability",
+                    loc= 'best')
+    plt.tight_layout()
+    if save_name is not None: savefigure(fig, save_name)
+    plt.show()
+
+def compareS2Bands(matching_dir, s2repr_dirs_original, s2repr_dirs_gee):
+    def getDataPositions(*xs, nodata=0.):
+        valid_pos = [[] for _ in range(len(xs))]
+        for i in range(xs[0].shape[1]):
+            for j in range(xs[0].shape[2]):
+                for x, vp in zip(xs, valid_pos):
+                    if not (x[:,i,j]==nodata).all(): vp.append((i,j))
+        valid_pos = [list(zip(*x)) for x in valid_pos]
+        return tuple(valid_pos)
+    df = {"band": list(range(1,13)), "min": [], "max": [], "mean": [], "median": []}
+    od, gd = matching_dir
+    os2 = loadRaster(getPaths(od, s2repr_dirs=s2repr_dirs_original, returns=["img"]), dtype=float)[:12]
+    gs2 = loadRaster(getPaths(gd, s2repr_dirs=s2repr_dirs_gee, returns=["img"]), dtype=float)[:12]
+    assert os2.shape==gs2.shape
+    # valid_locs = np.bitwise_or((os2==0.).all(0),(gs2==0.).all(0))
+    # os2 = os2[:,valid_locs]
+    # gs2 = gs2[:,valid_locs]
+    opos, gpos = getDataPositions(os2, gs2, nodata=0.)
+    os2 = os2[:,opos[0],opos[1]].reshape(12,-1)
+    gs2 = gs2[:,gpos[0],gpos[1]].reshape(12,-1)
+    for f, fn in zip([np.nanmin, np.nanmax, np.nanmean, np.nanmedian], 
+                        ["min", "max", "mean", "median"]):
+        of, gf = f(os2, axis=1), f(gs2, axis=1)
+        of2 = of.copy()
+        of2[of==gf] = 1. # avoid division by 0 when 0-0
+        rdelta = (gf-of)/of2*100
+        df[fn] = rdelta 
+    return pd.DataFrame(df)
     
-def CompareMapsStats(matching_dirs, variable_names, split_mask=None, split=None):
+def CompareMapsStats(matching_dir, variable_names, split_mask=None, split=None):
     mean_stats = {"variable": [], "stat": [], "original": [], "gee": [], "delta": [], "relative delta (%)": []}
     pu_stats = {"variable": [], "stat": [], "original": [], "gee": [], "delta": [], "relative delta (%)": []}
     if split_mask is not None or split is not None: 
@@ -1256,54 +1455,55 @@ def CompareMapsStats(matching_dirs, variable_names, split_mask=None, split=None)
         split_ = split
         split = ["train", "val", "test"].index(split)
         mean_stats["split"] = []
-        pu_stats["split"] = []    
-    for i, (orig_dir, gee_dir) in enumerate(matching_dirs):
-        # paths
-        gee_mean_path, gee_variance_path = getPaths(gee_dir, returns=["mean", "variance"])
-        orig_mean_path, orig_variance_path = getPaths(orig_dir, returns=["mean", "variance"])
-        # means
-        gee_mean = loadRaster(gee_mean_path)
-        orig_mean = loadRaster(orig_mean_path)
-        # variances
-        gee_predictive_std = loadRaster(gee_variance_path, elementwise_fn=np.sqrt)
-        orig_predictive_std = loadRaster(orig_variance_path, elementwise_fn=np.sqrt)
-        n = gee_mean.shape[0]
-        # select split
-        if split_mask is not None: 
-            gee_mean = gee_mean[:,split_mask==split]
-            orig_mean = orig_mean[:,split_mask==split]
-            gee_predictive_std = gee_predictive_std[:,split_mask==split]
-            orig_predictive_std = orig_predictive_std[:,split_mask==split]
-        else: 
-            gee_mean = gee_mean.reshape(n, -1)
-            orig_mean = orig_mean.reshape(n, -1)
-            gee_predictive_std = gee_predictive_std.reshape(n, -1)
-            orig_predictive_std = orig_predictive_std.reshape(n, -1)
-        for f, fn in zip([np.nanmin, np.nanmax, np.nanmean, np.nanmedian, np.nanstd], 
-                         ["min", "max", "mean", "median", "std"]):
-            # mean
-            mean_stats["variable"].extend(variable_names)
-            mean_stats["stat"].extend([fn for _ in range(1, n+1)])
-            mean_stats["original"].extend(f(orig_mean, axis=1).tolist())
-            mean_stats["gee"].extend(f(gee_mean, axis=1).tolist())
-            mean_stats["delta"].extend((f(gee_mean, axis=1)-f(orig_mean, axis=1)).tolist())
-            mean_stats["relative delta (%)"].extend(
-                ((f(gee_mean, axis=1)-f(orig_mean, axis=1))/f(orig_mean, axis=1)*100).tolist()
-            )
-            if split is not None:
-                mean_stats["split"].extend([split_ for _ in range(1, n+1)])
-            # variance
-            pu_stats["variable"].extend(variable_names)
-            pu_stats["stat"].extend([fn for _ in range(1, n+1)])
-            pu_stats["original"].extend(f(orig_predictive_std, axis=1).tolist())
-            pu_stats["gee"].extend(f(gee_predictive_std, axis=1).tolist())
-            pu_stats["delta"].extend((f(gee_predictive_std, axis=1)-f(orig_predictive_std, axis=1)).tolist())
-            pu_stats["relative delta (%)"].extend(
-                ((f(gee_predictive_std, axis=1)-f(orig_predictive_std, axis=1))/f(orig_predictive_std, axis=1)*100).tolist()
-            )
-            if split is not None:
-                pu_stats["split"].extend([split_ for _ in range(1, n+1)])
-        return pd.DataFrame(mean_stats), pd.DataFrame(pu_stats)
+        pu_stats["split"] = []
+    (orig_dir, gee_dir) = matching_dir    
+    #for i, (orig_dir, gee_dir) in enumerate(matching_dirs):
+    # paths
+    gee_mean_path, gee_variance_path = getPaths(gee_dir, returns=["mean", "variance"])
+    orig_mean_path, orig_variance_path = getPaths(orig_dir, returns=["mean", "variance"])
+    # means
+    gee_mean = loadRaster(gee_mean_path)
+    orig_mean = loadRaster(orig_mean_path)
+    # variances
+    gee_predictive_std = loadRaster(gee_variance_path, elementwise_fn=np.sqrt)
+    orig_predictive_std = loadRaster(orig_variance_path, elementwise_fn=np.sqrt)
+    n = gee_mean.shape[0]
+    # select split
+    if split_mask is not None: 
+        gee_mean = gee_mean[:,split_mask==split]
+        orig_mean = orig_mean[:,split_mask==split]
+        gee_predictive_std = gee_predictive_std[:,split_mask==split]
+        orig_predictive_std = orig_predictive_std[:,split_mask==split]
+    else: 
+        gee_mean = gee_mean.reshape(n, -1)
+        orig_mean = orig_mean.reshape(n, -1)
+        gee_predictive_std = gee_predictive_std.reshape(n, -1)
+        orig_predictive_std = orig_predictive_std.reshape(n, -1)
+    for f, fn in zip([np.nanmin, np.nanmax, np.nanmean, np.nanmedian, np.nanstd], 
+                        ["min", "max", "mean", "median", "std"]):
+        # mean
+        mean_stats["variable"].extend(variable_names)
+        mean_stats["stat"].extend([fn for _ in range(1, n+1)])
+        mean_stats["original"].extend(f(orig_mean, axis=1).tolist())
+        mean_stats["gee"].extend(f(gee_mean, axis=1).tolist())
+        mean_stats["delta"].extend((f(gee_mean, axis=1)-f(orig_mean, axis=1)).tolist())
+        mean_stats["relative delta (%)"].extend(
+            ((f(gee_mean, axis=1)-f(orig_mean, axis=1))/f(orig_mean, axis=1)*100).tolist()
+        )
+        if split is not None:
+            mean_stats["split"].extend([split_ for _ in range(1, n+1)])
+        # variance
+        pu_stats["variable"].extend(variable_names)
+        pu_stats["stat"].extend([fn for _ in range(1, n+1)])
+        pu_stats["original"].extend(f(orig_predictive_std, axis=1).tolist())
+        pu_stats["gee"].extend(f(gee_predictive_std, axis=1).tolist())
+        pu_stats["delta"].extend((f(gee_predictive_std, axis=1)-f(orig_predictive_std, axis=1)).tolist())
+        pu_stats["relative delta (%)"].extend(
+            ((f(gee_predictive_std, axis=1)-f(orig_predictive_std, axis=1))/f(orig_predictive_std, axis=1)*100).tolist()
+        )
+        if split is not None:
+            pu_stats["split"].extend([split_ for _ in range(1, n+1)])
+    return pd.DataFrame(mean_stats), pd.DataFrame(pu_stats)
     
 def evaluateSplit(prediction_dir, gt_dir, split_mask, split):
     dir_name = prediction_dir.split("/")[-1]
@@ -1372,18 +1572,26 @@ def loadMetricsDataFrame(matching_dirs, metrics=["mse", "ence", "auce", "cv"],
     fulldf = pd.DataFrame(data)
     return fulldf
 
+def absoluteToRelativeScale(value, reference):
+    return value / reference
+
+def relativeToAbsoluteScale(value, reference):
+    return value * reference
+
 def plotTrainTestMetricsDataFrames(train_df, test_df, type="bar", save_name=None, 
-                                   variables=None, split_splits=True, figsize=(15,10)):
+                                   variables=None, metrics=None, split_splits=True, 
+                                   add_relative=True, figsize=(15,10)):
     assert type in ["bar", "scatter"]
     metrics_df = pd.concat([train_df, test_df])
     variables = variables if variables is not None else metrics_df.variable.unique()
+    metrics = metrics if metrics is not None else metrics_df.metric.unique()
     fig, axs = plt.subplots(
-        nrows=len(metrics_df.metric.unique()),
-        ncols=len(variables),
+        ncols=len(metrics),
+        nrows=len(variables),
         figsize=figsize
     )
-    for i, m in enumerate(metrics_df.metric.unique()):
-        for j, v in enumerate(variables):
+    for i, v in enumerate(variables):
+        for j, m in enumerate(metrics):
             tmp = (metrics_df
                    .query(f"metric == '{m}' & variable == '{v}'")
                    .drop(columns=["metric", "variable", "imageId"]))
@@ -1398,19 +1606,38 @@ def plotTrainTestMetricsDataFrames(train_df, test_df, type="bar", save_name=None
                 sns.scatterplot(data=mtmp, x=xx, y="x", hue=hue, ax=axs[i,j], marker="_", s=100, linewidth=2)
                 axs[i,j].set(xlim=(-0.5, 1.5))
             else:
+                tmp = tmp.groupby(by=["source", "split"]).mean().reset_index()
                 kw = {"hue_order": ["original", "gee"]} if split_splits else {}
                 sns.barplot(data=tmp, x=xx, y="x", hue=hue, ax=axs[i,j], 
-                            errorbar=None, **kw)
-            try: axs[i,j].get_legend().remove()
+                            errorbar=None, order=["train", "test"], **kw)
+                if add_relative:
+                    train_reference = tmp.query("source == 'original' & split == 'train'").x.values[0]
+                    tmp2 = tmp.copy()
+                    tmp2.x = absoluteToRelativeScale(tmp2.x, train_reference)
+                    sec_ax = axs[i,j].twinx()
+                    sns.barplot(data=tmp2, x=xx, y="x", hue=hue, ax=sec_ax, 
+                                errorbar=None, order=["train", "test"], **kw)
+                    sec_ax.grid(False)
+            try: 
+                if i==len(variables)-1 and j == len(metrics)-1:
+                    axs[i,j].legend().set_title("")
+                    sec_ax.get_legend().remove()
+                else:
+                    for a in [axs[i,j], sec_ax]:
+                        a.get_legend().remove()                    
             except: continue
-            axs[i,j].set_xlabel("")
-            axs[i,j].set_ylabel("")
+            for a in [axs[i,j], sec_ax]:
+                a.set_xlabel("")
+                a.set_ylabel("")
             if i==0:
-                axs[i,j].set_title(v)
+                axs[i,j].set_title(m)
             if j==0:
-                axs[i,j].set_ylabel(m)
+                axs[i,j].set_ylabel(f"{v}\n(absolute)")
+            if j==len(metrics)-1:
+                sec_ax.set_ylabel(f"{v}\n(relative)")
+            if i==len(variables)-1 and j == len(metrics)-1: axs
     plt.tight_layout()
-    fig = single_legend_figure(fig, 2)
+    # fig = single_legend_figure(fig, 2)
     if save_name is not None: savefigure(fig, save_name)
     plt.show()
 
