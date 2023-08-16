@@ -72,21 +72,21 @@ class ExperimentVisualizer():
         if ax is None:
             fig, ax = plt.subplots()
         var_idx = self.variable_names.index(variable)
-        hdf = pd.DataFrame(columns=[self.exp_var_name, "probability", "binned predictive uncertainty"])
+        hdf = pd.DataFrame(columns=[self.exp_var_name, "probability", "predictive uncertainty"])
         for i, rcu in enumerate(self.rcus):
             H = np.nansum(rcu.histogram[0,var_idx], axis=0)
             ct = np.full(H.shape, str(self.exp_vars[i]))
             bins = np.sqrt(rcu.histogram.bins[var_idx])
-            hdf = pd.concat([hdf, pd.DataFrame({self.exp_var_name: ct, "probability": H/np.nansum(H), "binned predictive uncertainty": bins})])
-            hdf = hdf[hdf["binned predictive uncertainty"]<hi_bound]
-        hhdf = hdf.groupby(["binned predictive uncertainty", self.exp_var_name]).sum().reset_index()
+            hdf = pd.concat([hdf, pd.DataFrame({self.exp_var_name: ct, "probability": H/np.nansum(H), "predictive uncertainty": bins})])
+            hdf = hdf[hdf["predictive uncertainty"]<hi_bound]
+        hhdf = hdf.groupby(["predictive uncertainty", self.exp_var_name]).sum().reset_index()
         hhdf = hhdf.sort_values(by=[self.exp_var_name])
         if palette is not None: kwargs = {"palette": palette}
         else: kwargs = {}
-        g = sns.lineplot(data=hhdf, x="binned predictive uncertainty", hue=self.exp_var_name, y="probability", ax=ax, alpha=0.5, **kwargs)
+        g = sns.lineplot(data=hhdf, x="predictive uncertainty", hue=self.exp_var_name, y="probability", ax=ax, alpha=0.5, **kwargs)
         if log: 
             ax.set_xscale("log")
-            ax.set_xlabel("log binned predictive uncertainty")
+            ax.set_xlabel("log predictive uncertainty")
         if not show_legend:
             ax.get_legend().remove()
             cmap = sns.color_palette("bwr")
@@ -94,14 +94,14 @@ class ExperimentVisualizer():
             argmax_expvar = np.argmax(self.exp_vars)
             max_rcu = self.rcus[argmax_expvar]
             prob = np.nansum(max_rcu.histogram[0,var_idx], axis=0)/np.nansum(max_rcu.histogram[0,var_idx])
-            bins = max_rcu.histogram.bins[var_idx]
+            bins = np.sqrt(max_rcu.histogram.bins[var_idx])
             mask = bins<hi_bound
             bins, prob = bins[mask], prob[mask]
             ax.plot(bins, prob, color=r, label=f"maximum: {self.exp_vars[argmax_expvar]:.2f}%", alpha=1)
             argmin_expvar = np.argmin(self.exp_vars)
             min_rcu = self.rcus[argmin_expvar]
             prob = np.nansum(min_rcu.histogram[0,var_idx], axis=0)/np.nansum(min_rcu.histogram[0,var_idx])
-            bins = min_rcu.histogram.bins[var_idx]
+            bins = np.sqrt(min_rcu.histogram.bins[var_idx])
             mask = bins<hi_bound
             bins, prob = bins[mask], prob[mask]
             ax.plot(bins, prob, color=b, label=f"minimum: {self.exp_vars[argmin_expvar]:.2f}%", alpha=1)
@@ -196,7 +196,7 @@ class ExperimentVisualizer():
             self.variable_metric_boxplot(metric, var, kind, exp_var_bins, axs[i], fig_ncols)
             axs[i].set_title(var)
             axs[i].set_ylabel("")
-        fig.suptitle(metric)
+        # fig.suptitle(metric)
         if num_variables%self.fig_ncols!=0: fig.delaxes(axs.flatten()[-1])
         if fig_ncols is not None: 
             self.fig_ncols = previous_ncols
@@ -205,7 +205,7 @@ class ExperimentVisualizer():
                     for tick in ax.get_xticklabels():
                         tick.set_rotation(45)
         fig.tight_layout()
-        if save_name is not None: savefigure(fig, save_name)
+        if save_name is not None: savefigure(fig, save_name) 
         plt.show()
     
     def variable_calibration_plot(self, metric, variable, k=100, log_bins=False, ax=None, hi_bound=np.inf, palette=None, show_legend=True):
@@ -990,8 +990,8 @@ def precomputeCbarBoundsPredictionMaps(
 def showPredictionMaps(dirs, titles, variable_index, variable_name, s2repr_dirs, gt_dir, 
                         shapefile_paths, islice=None, jslice=None, normalize=False, save_name=None,
                         predictive_uncertainty_bounds=None, rerror_bounds=None, cerror_bounds=None,
-                        figsize=(15,7.5)):
-    fig, axs = plt.subplots(nrows=len(titles), ncols=6, figsize=figsize)
+                        figsize=(15,22.75)):
+    fig, axs = plt.subplots(ncols=len(titles), nrows=7, figsize=figsize)
     for i, d in enumerate(dirs):
         dir_name = d.split("/")[-1]
         pid = dir_name.split("_")[0]
@@ -1011,26 +1011,28 @@ def showPredictionMaps(dirs, titles, variable_index, variable_name, s2repr_dirs,
         dvmin, dvmax = vmin-vmax, vmax-vmin
         rerror = mean-gt
         cerror = np.abs(rerror)-predictive_std
-        pubounds = (vmin, vmax) if predictive_uncertainty_bounds is None else (predictive_uncertainty_bounds[0][variable_index-1], predictive_uncertainty_bounds[1][variable_index-1])
+        pubound = vmax if predictive_uncertainty_bounds is None else predictive_uncertainty_bounds[variable_index-1]
         rbound = np.nanmax(np.abs(rerror)) if rerror_bounds is None else rerror_bounds[variable_index-1]
         cbound = np.nanmax(np.abs(cerror)) if cerror_bounds is None else cerror_bounds[variable_index-1]
-        axs[i,0].imshow(rgb)
-        if i ==0: axs[i,0].set_title(f"RGB")
-        sns.heatmap(gt, ax=axs[i,1], vmin=vmin, vmax=vmax)
-        if i==0: axs[i,1].set_title(f"ground truth\n({gt_date.strftime('%d.%m.%Y')})")
-        sns.heatmap(mean, ax=axs[i,2], vmin=vmin, vmax=vmax)
-        if i==0: axs[i,2].set_title(f"predicted\nmean")
-        sns.heatmap(predictive_std, ax=axs[i,3], vmin=pubounds[0], vmax=pubounds[1])
-        if i==0: axs[i,3].set_title(f"predictive\nuncertainty")
-        sns.heatmap(rerror, ax=axs[i,4], cmap="bwr", vmin=-rbound, vmax=rbound)
-        if i==0: axs[i,4].set_title(f"regression\nresiduals")
-        sns.heatmap(cerror, ax=axs[i,5], cmap="bwr", vmin=-cbound, vmax=cbound)
-        if i==0: axs[i,5].set_title(f"calibration\nresiduals")
+        axs[0,i].imshow(rgb)
+        if i==0: axs[0,i].set_ylabel(f"RGB")
+        sns.heatmap(gt, ax=axs[1,i], vmin=vmin, vmax=vmax, cbar=i==len(titles)-1)
+        if i==0: axs[1,i].set_ylabel(f"ground truth\n({gt_date.strftime('%d.%m.%Y')})")
+        sns.heatmap(mean, ax=axs[2,i], vmin=vmin, vmax=vmax, cbar=i==len(titles)-1)
+        if i==0: axs[2,i].set_ylabel(f"predicted\nmean")
+        sns.heatmap(rerror, ax=axs[3,i], cmap="bwr", vmin=-rbound, vmax=rbound, cbar=i==len(titles)-1)
+        if i==0: axs[3,i].set_ylabel(f"regression\nresiduals")
+        sns.heatmap(predictive_std, ax=axs[4,i], vmin=0, vmax=pubound, cbar=i==len(titles)-1)
+        if i==0: axs[4,i].set_ylabel(f"predictive\nuncertainty")
+        sns.heatmap(np.abs(rerror), ax=axs[5,i], vmin=0, vmax=pubound, cbar=i==len(titles)-1)
+        if i==0: axs[5,i].set_ylabel(f"absolute\nregression residuals")
+        sns.heatmap(cerror, ax=axs[6,i], cmap="bwr", vmin=-cbound, vmax=cbound, cbar=i==len(titles)-1)
+        if i==0: axs[6,i].set_ylabel(f"calibration\nresiduals")
     for ax in axs.flatten(): 
         ax.set_xticks([])
         ax.set_yticks([])
     for i, d, in enumerate(dirs):
-        axs[i,0].set_ylabel(f'{titles[i]}\n({datetime.strptime(Path(d).name.split("_")[1].split("T")[0], "%Y%m%d").strftime("%d.%m.%Y")})')
+        axs[0,i].set_title(f'{titles[i]}\n({datetime.strptime(Path(d).name.split("_")[1].split("T")[0], "%Y%m%d").strftime("%d.%m.%Y")})')
     fig.suptitle(variable_name)
     plt.tight_layout()
     if save_name is not None: savefigure(fig, save_name)
@@ -1038,7 +1040,7 @@ def showPredictionMaps(dirs, titles, variable_index, variable_name, s2repr_dirs,
 
 def showRegressionMaps(dirs, titles, variable_index, variable_name, s2repr_dirs, gt_dir, 
                         shapefile_paths, islice=None, jslice=None, normalize=False, save_name=None,
-                        rerror_bounds=None, figsize=(15,7.5), **kwargs):
+                        rerror_bounds=None, figsize=(15,13), **kwargs):
     fig, axs = plt.subplots(ncols=len(titles), nrows=4, figsize=figsize)
     for i, d in enumerate(dirs):
         dir_name = d.split("/")[-1]
@@ -1058,18 +1060,93 @@ def showRegressionMaps(dirs, titles, variable_index, variable_name, s2repr_dirs,
         rerror = mean-gt
         rbound = np.nanmax(np.abs(rerror)) if rerror_bounds is None else rerror_bounds[variable_index-1]
         axs[0,i].imshow(rgb)
-        if i==0: axs[0,i].set_title(f"RGB")
-        sns.heatmap(gt, ax=axs[1,i], vmin=vmin, vmax=vmax)
-        if i==0: axs[1,i].set_title(f"ground truth\n({gt_date.strftime('%d.%m.%Y')})")
-        sns.heatmap(mean, ax=axs[2,i], vmin=vmin, vmax=vmax)
-        if i==0: axs[2,i].set_title(f"predicted\nmean")
-        sns.heatmap(rerror, ax=axs[i,3], cmap="bwr", vmin=-rbound, vmax=rbound)
-        if i==0: axs[i,3].set_title(f"regression\nresiduals")
+        if i==0: axs[0,i].set_ylabel(f"RGB")
+        sns.heatmap(gt, ax=axs[1,i], vmin=vmin, vmax=vmax, cbar=i==len(titles)-1)
+        if i==0: axs[1,i].set_ylabel(f"ground truth\n({gt_date.strftime('%d.%m.%Y')})")
+        sns.heatmap(mean, ax=axs[2,i], vmin=vmin, vmax=vmax, cbar=i==len(titles)-1)
+        if i==0: axs[2,i].set_ylabel(f"predicted\nmean")
+        sns.heatmap(rerror, ax=axs[3,i], cmap="bwr", vmin=-rbound, vmax=rbound, cbar=i==len(titles)-1)
+        if i==0: axs[3,i].set_ylabel(f"regression\nresiduals")
     for ax in axs.flatten(): 
         ax.set_xticks([])
         ax.set_yticks([])
     for i, d, in enumerate(dirs):
-        axs[0,i].set_ylabel(f'{titles[i]}\n({datetime.strptime(Path(d).name.split("_")[1].split("T")[0], "%Y%m%d").strftime("%d.%m.%Y")})')
+        axs[0,i].set_title(f'{titles[i]}\n({datetime.strptime(Path(d).name.split("_")[1].split("T")[0], "%Y%m%d").strftime("%d.%m.%Y")})')
+    fig.suptitle(variable_name)
+    plt.tight_layout()
+    if save_name is not None: savefigure(fig, save_name)
+    plt.show()
+
+def showUsabilityMaps(dirs, titles, variable_index, variable_name, s2repr_dirs, gt_dir, 
+                        shapefile_paths, islice=None, jslice=None, normalize=False, save_name=None,
+                        figsize=(15,6.5), predictive_uncertainty_bounds=None, **kwargs):
+    fig, axs = plt.subplots(ncols=len(titles), nrows=2, figsize=figsize)
+    for i, d in enumerate(dirs):
+        dir_name = d.split("/")[-1]
+        pid = dir_name.split("_")[0]
+        gt_date = compute_gt_date(pid, shapefile_paths)
+        img_path, variance_path = getPaths(d, s2repr_dirs, gt_dir, returns=["img","variance"])
+        # load rasters
+        rgb = loadRaster(img_path, bands=[4,3,2], transpose_order=(1,2,0), clip_range=(100, 2000), islice=islice, jslice=jslice)
+        predictive_std = loadRaster(variance_path, bands=variable_index, islice=islice, jslice=jslice, elementwise_fn=np.sqrt)
+        if normalize:
+            predictive_std, _ = multiNorm2d(predictive_std, predictive_std)
+            vmin, vmax = 0, 1
+        else:
+            vmin, vmax = multiMinMax(predictive_std, predictive_std)
+        pubound = vmax if predictive_uncertainty_bounds is None else predictive_uncertainty_bounds[variable_index-1]
+        axs[0,i].imshow(rgb)
+        if i==0: axs[0,i].set_ylabel(f"RGB")
+        sns.heatmap(predictive_std, ax=axs[1,i], vmin=0, vmax=pubound, cbar=i==len(titles)-1)
+        if i==0: axs[1,i].set_ylabel(f"predictive\nuncertainty")
+    for ax in axs.flatten(): 
+        ax.set_xticks([])
+        ax.set_yticks([])
+    for i, d, in enumerate(dirs):
+        axs[0,i].set_title(f'{titles[i]}\n({datetime.strptime(Path(d).name.split("_")[1].split("T")[0], "%Y%m%d").strftime("%d.%m.%Y")})')
+    fig.suptitle(variable_name)
+    plt.tight_layout()
+    if save_name is not None: savefigure(fig, save_name)
+    plt.show()
+
+def showCalibrationMaps(dirs, titles, variable_index, variable_name, s2repr_dirs, gt_dir, 
+                        shapefile_paths, islice=None, jslice=None, normalize=False, save_name=None,
+                        predictive_uncertainty_bounds=None, cerror_bounds=None,
+                        figsize=(15,13), **kwargs):
+    fig, axs = plt.subplots(ncols=len(titles), nrows=4, figsize=figsize)
+    for i, d in enumerate(dirs):
+        dir_name = d.split("/")[-1]
+        pid = dir_name.split("_")[0]
+        gt_date = compute_gt_date(pid, shapefile_paths)
+        img_path, mean_path, gt_path, variance_path = getPaths(d, s2repr_dirs, gt_dir, returns=["img","mean","gt", "variance"])
+        # load rasters
+        rgb = loadRaster(img_path, bands=[4,3,2], transpose_order=(1,2,0), clip_range=(100, 2000), islice=islice, jslice=jslice)
+        gt = loadRaster(gt_path, bands=variable_index, islice=islice, jslice=jslice, set_nan_mask=True)
+        if variable_index in [3,5]: gt /= 100 # Cover/Dens normalization!!
+        mean = loadRaster(mean_path, bands=variable_index, islice=islice, jslice=jslice)
+        predictive_std = loadRaster(variance_path, bands=variable_index, islice=islice, jslice=jslice, elementwise_fn=np.sqrt)
+        if normalize:
+            gt, mean = multiNorm2d(gt, mean, predictive_std)
+            vmin, vmax = 0, 1
+        else:
+            vmin, vmax = multiMinMax(gt, mean, predictive_std)
+        rerror = mean-gt
+        cerror = np.abs(rerror)-predictive_std
+        pubound = vmax if predictive_uncertainty_bounds is None else predictive_uncertainty_bounds[variable_index-1]
+        cbound = np.nanmax(np.abs(cerror)) if cerror_bounds is None else cerror_bounds[variable_index-1]
+        axs[0,i].imshow(rgb)
+        if i==0: axs[0,i].set_ylabel(f"RGB")
+        sns.heatmap(predictive_std, ax=axs[1,i], vmin=0, vmax=pubound, cbar=i==len(titles)-1)
+        if i==0: axs[1,i].set_ylabel(f"predictive\nuncertainty")
+        sns.heatmap(np.abs(rerror), ax=axs[2,i], vmin=0, vmax=pubound, cbar=i==len(titles)-1)
+        if i==0: axs[2,i].set_ylabel(f"absolute\nregression residuals")
+        sns.heatmap(cerror, ax=axs[3,i], cmap="bwr", vmin=-cbound, vmax=cbound, cbar=i==len(titles)-1)
+        if i==0: axs[3,i].set_ylabel(f"calibration\nresiduals")
+    for ax in axs.flatten(): 
+        ax.set_xticks([])
+        ax.set_yticks([])
+    for i, d, in enumerate(dirs):
+        axs[0,i].set_title(f'{titles[i]}\n({datetime.strptime(Path(d).name.split("_")[1].split("T")[0], "%Y%m%d").strftime("%d.%m.%Y")})')
     fig.suptitle(variable_name)
     plt.tight_layout()
     if save_name is not None: savefigure(fig, save_name)
