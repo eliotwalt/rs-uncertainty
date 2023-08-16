@@ -637,7 +637,7 @@ def showPairedBandsHistograms(d1, d2, s2repr_dirs, islice=None, jslice=None, sav
     vc_path = getPaths(d2, s2repr_dirs=s2repr_dirs, returns=["img"])
     nc = loadRaster(nc_path, islice=islice, jslice=jslice, bands=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]).reshape(12,-1)
     vc = loadRaster(vc_path, islice=islice, jslice=jslice, bands=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]).reshape(12,-1)
-    fig, axs = plt.subplots(ncols=3, nrows=4, figsize=(12,12))
+    fig, axs = plt.subplots(ncols=4, nrows=3, figsize=(15,7))
     axs = axs.flatten()
     for i, ax in enumerate(axs):
         df = pd.DataFrame({
@@ -645,10 +645,61 @@ def showPairedBandsHistograms(d1, d2, s2repr_dirs, islice=None, jslice=None, sav
             "conditions": ["no cloud" for _ in nc[i]]+["very cloudy" for _ in vc[i].tolist()],
         })
         sns.histplot(data=df, x="values", hue="conditions", ax=ax, binwidth=30)
-        ax.set_title(f"Band {i+1}")
+        ax.set_title(f"Sentinel-2 band {i+1}")
         ax.set_xlabel("")
         ax.set_yscale("log")
+        if i not in [0,4,8]: ax.set_ylabel("")
         if i<11: ax.legend([],[],frameon=False)
+    plt.tight_layout()
+    if save_name is not None: savefigure(fig, save_name)
+    plt.show()
+
+def showAllSentinel2Bands(d1, d2, s2repr_dirs, islice, jslice, save_name, bands=[6,7,8,9,11], figsize=(12,5)):
+    nc_path = getPaths(d1, s2repr_dirs=s2repr_dirs, returns=["img"])
+    vc_path = getPaths(d2, s2repr_dirs=s2repr_dirs, returns=["img"])
+    nc = loadRaster(nc_path, islice=islice, jslice=jslice, bands=bands)
+    vc = loadRaster(vc_path, islice=islice, jslice=jslice, bands=bands)
+    fig, axs = plt.subplots(ncols=len(bands), nrows=2, figsize=figsize)
+    for i, b in enumerate(bands):
+        vmin, vmax = multiMinMax(nc[i], vc[i])
+        sns.heatmap(nc[i], ax=axs[0,i], cbar=False, vmin=vmin, vmax=vmax)
+        if i==0: axs[0,i].set_ylabel("no cloud")
+        axs[0,i].set_xticks([])
+        axs[0,i].set_yticks([])
+        axs[0,i].set_title(f"Sentinel-2\nband {b}")
+        sns.heatmap(vc[i], ax=axs[1,i], cbar=False, vmin=vmin, vmax=vmax)
+        if i==0: axs[1,i].set_ylabel("very cloudy")
+        axs[1,i].set_xticks([])
+        axs[1,i].set_yticks([])
+    plt.tight_layout()
+    if save_name is not None: savefigure(fig, save_name)
+    plt.show()
+
+def showClosestSentinel1Bands(d, s1_dir, islice, jslice, save_name):
+    s2_date = datetime.strptime(
+        d.split("/")[-1].split("_")[-1].split("T")[0],
+        "%Y%m%d"
+    )
+    delta = float("inf")
+    s1_path = None 
+    for this_s1_path in Path(s1_dir).glob("*.tif"):
+        s1_name = this_s1_path.name
+        this_s1_date = datetime.strptime(
+            s1_name.split("_")[5].split("T")[0],
+            "%Y%m%d"
+        )
+        if s1_path is None or abs(this_s1_date-s2_date)<delta: 
+            s1_path = this_s1_path
+            delta = abs(this_s1_date-s2_date)
+    s1_bands = loadRaster(s1_path, islice=islice, jslice=jslice, bands=[1,2])
+    fig, axs = plt.subplots(ncols=2, nrows=1, figsize=(12,5))
+    axs = axs.flatten()
+    vmaxs = [200, 400]
+    for i, ax in enumerate(axs):
+        sns.heatmap(s1_bands[i], ax=ax, vmax=vmaxs[i], cbar=False)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_title(f"Sentinel-1 band: {i+1}")
     plt.tight_layout()
     if save_name is not None: savefigure(fig, save_name)
     plt.show()
@@ -657,25 +708,26 @@ def showDistanceToTrainsetExpectation(
     dirs,
     titles,
     s2repr_dirs,
+    variable_indexes,
     trainset_means,
     variable_names,
     islice=None,
     jslice=None,
-    figsize=(12, 14),
+    figsize=(12, 6),
     save_name=None,
+    ncols=None, nrows=None
 ):
-    fig, axs = plt.subplots(ncols=2, nrows=3, figsize=figsize)
+    fig, axs = plt.subplots(ncols=ncols, nrows=nrows, figsize=figsize)
     axs = axs.flatten()
     df = pd.DataFrame()
     for d, c in zip(dirs, titles):
-        mean_path, img_path = getPaths(d, s2repr_dirs=s2repr_dirs, returns=["mean", "img"])
-        mean = loadRaster(mean_path, bands=None, islice=islice, jslice=jslice).reshape(5, -1)
-        cp = loadRaster(img_path, bands=-1, islice=islice, jslice=jslice).reshape(-1)
+        mean_path  = getPaths(d, s2repr_dirs=s2repr_dirs, returns=["mean"])
+        mean = loadRaster(mean_path, bands=variable_indexes, islice=islice, jslice=jslice).reshape(len(variable_names), -1)
         mask = ~np.isnan(mean).all(0)
-        mean, cp = mean[:,mask], cp[mask]
-        for i, variable_name in enumerate(variable_names):
+        mean = mean[:,mask]
+        for i, (variable_name, var_index) in enumerate(zip(variable_names, variable_indexes)):
             dfc = pd.DataFrame({
-                "mean": mean[i]-trainset_means[i],
+                "mean": mean[i]-trainset_means[var_index-1],
                 "condition": c,
                 "variable": variable_name
             })
@@ -684,7 +736,7 @@ def showDistanceToTrainsetExpectation(
                 std_mean=("mean", lambda x: np.nanstd(x)),
             )
             df = pd.concat([df, dfc], axis=0)
-    for i, (ax, variable_name) in enumerate(zip(axs[:-1], variable_names)):
+    for i, (ax, variable_name) in enumerate(zip(axs, variable_names)):
         sub = df.query(f"variable == '{variable_name}'")
         sns.lineplot(data=sub, x="condition", y="avg_mean", ax=ax)
         color = ax.get_lines()[-1].get_c()
@@ -697,8 +749,10 @@ def showDistanceToTrainsetExpectation(
         ax.set_ylim(-ylim, ylim)
         ax.hlines(0, xmin=0, xmax=len(titles)-1, linestyle="dotted", color="black")
         ax.set_xlabel("")
-        ax.set_ylabel("avg distance to train set expectation")
-    fig.delaxes(axs.flatten()[-1])
+        if i==0: ax.set_ylabel("mean distance to\ntrain set expectation") 
+        else: ax.set_ylabel("")
+        for tick in ax.get_xticklabels():
+            tick.set_rotation(45)
     plt.tight_layout()
     if save_name is not None: savefigure(fig, save_name)
     plt.show()
