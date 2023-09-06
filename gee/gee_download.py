@@ -131,38 +131,6 @@ class GEELocalDownloader:
     def verbose_print(self, msg):
         if self.verbose: print(msg)
 
-    # def merge_image_collection_by_date(self, imgCol):
-    #     '''
-    #     function that merges images together that have the same date. 
-    #     adapted from: https://gis.stackexchange.com/questions/372744/how-to-create-a-loop-which-creates-single-mosaic-images-for-each-day-from-a-sel
-    #     '''    
-    #     self.verbose_print(f"Creating mosaic...")
-    #     #Convert the image collection to a list.
-    #     imgList = imgCol.toList(imgCol.size())        
-    #     # Driver function for mapping the unique dates
-    #     def uniqueDriver(image):
-    #         return ee.Image(image).date().format("YYYY-MM-dd")        
-    #     uniqueDates = imgList.map(uniqueDriver).distinct()
-    #     # Driver function for mapping the moasiacs
-    #     def mosaicDriver(date):
-    #         date = ee.Date(date)            
-    #         image = (imgCol
-    #             .filterDate(date, date.advance(1, "day")) #or (date.advance(-1, "day"), date.advance(1, "day"))?
-    #             .mosaic())            
-    #         return image.set("system:time_start", date.millis(), 
-    #                         "system:date", date.format("YYYY-MM-dd"),
-    #                         "system:id", date.format("YYYY-MM-dd"))        
-    #     mosaicImgList = uniqueDates.map(mosaicDriver)        
-    #     return ee.ImageCollection(mosaicImgList)
-
-    # def aggregate_image_collection(self, icol, agg):
-    #     self.verbose_print(f"Aggregating image collection")
-    #     if "cloudless" in agg:
-    #         # TODO: cloud masking
-    #         raise NotImplementedError()
-    #     agg_img = eval(f"icol.{agg}()")
-    #     return agg_img
-
     def reproject(self, paths, ref_path, out_dir): 
         for path in paths: 
             self.verbose_print(f"Reprojecting {path}")

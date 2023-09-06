@@ -1,39 +1,22 @@
-# bayes-forest-structure
+# Uncertainty and Robustness in Remote Sensing for Environmental Monitoring
 
-Code accompanying our paper "Country-wide Retrieval of Forest Structure From Optical and SAR Satellite Imagery With Bayesian Deep Learning" [[arXiv]](https://arxiv.org/abs/2111.13154)
+This repository contains the code for my Master's thesis written at the Photogrammetry and Remote Sensing Group at ETH Zürich. Most of the code is taken from [this repository](https://github.com/prs-eth/bayes-forest-structure), to which we added evaluation and plotting utilities. 
 
-![](highlevel.png)
+Note that the data folders are not included. The drive containing this was mounted at the root of the repository in a folder called `assets/`. Results and additional data can be found on Euler. 
 
 ## Code organization
-* `./config` configuration files for data preprocessing, training and testing
-* `./src` main project code
-    * `./src/scripts` helper scripts for preprocessing, evaluation etc.
 
-## Getting started
-### Prerequisites
-* `python >= 3.8`
-* `numpy >= 1.19`
-* `pytorch >= 1.9`
-* `scikit-image >= 0.18`
-* `rasterio >= 1.1.5`
-* `gdal >= 3.0`
-* `fiona >= 1.8.13`
-* `latextable`
+* `./config` configuration files for different tasks
+* `./gee` all things Google Earth Engine and Google Drive
+  * `download_timeseries.py` is the main script used to download non-aggregated timeseries of Sentinel-2 images associated to a given ALS project
+  * `gee_download.py` and `gdrive_handler.py` take care of downloading GEE images to a Google drive and locally automatically
+  * This code requires to get `credentials.json` and `token.json` from the [Google Cloud API](https://cloud.google.com/apis/) after creating a GEE project and authorizing the use of Google drive API on your own account 
 
-### Inference
-To apply our model to your data, preprocess the SAR data using the `/src/scripts/preprocess_s1.py` script and then reproject it to the Sentinel-2 tile. Then use `/src/scripts/predict_tile.py` to process the tile, passing the locations to the optical and SAR files as arguments. Make sure to also pass the paths of the `config.yaml` file (containing network configurations and statistics for data normalization) and of all five network checkpoints via the respective command line args. The files can be downloaded from [here](https://drive.google.com/drive/folders/1yUQOjBcbplg6I_9HmFp1vW8pdf4vOzxJ?usp=sharing). The output tiles will be written to the location passed as `--out_dir`.
-
-### Training
-For improved efficiency during training, the preprocessed and reprojected Sentinel images as well as the ground truth should be pickled first using the `/src/scripts/prepare_dataset.py` script. For training the `/src/train.py` script (along with the `/config/resnext.yaml` config file) is used.
-
-## Citation
-```
-@misc{becker2021countrywide,
-      title={Country-wide Retrieval of Forest Structure From Optical and SAR Satellite Imagery With Bayesian Deep Learning}, 
-      author={Alexander Becker and Stefania Russo and Stefano Puliti and Nico Lang and Konrad Schindler and Jan Dirk Wegner},
-      year={2021},
-      eprint={2111.13154},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV}
-}
-```
+* `./notebooks` notebooks containing the plots of the main analysis
+* `./run` bash scripts designed to launch specific jobs on Euler
+  * Note that the concept of "one image dataset" is used throughout the code for compatibility with the original code organization. It consists in creating a dataset from a single image by changing a flat file structure into a nested file structure. see `src` for more details
+* `./src` contains the core of the python code
+  * `./src/scripts` contains the code for the main tasks (training, evaluating, etc.)
+    * `configure_one_image_dataset_experiment.py` can be used to generate "one image datasets" configuration files from a triplet of create/predict/eval template config files (see `./config/{create_dataset,evaluate_dataset,predict_testset}/*_template.yaml`) using symbolic links to temporary directories.
+  * `viz.py` contains the code for all multi-level plots shown in the analysis
+  * `metrics.py` contains the online computation implementation of the RCU metrics

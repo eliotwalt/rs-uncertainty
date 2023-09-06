@@ -1,1 +1,1 @@
-./run/evaluate_testset.sh config/evaluate_testset/baseline.yaml
+./run/proto/evaluate_testset.sh config/evaluate_testset/baseline.yaml
